@@ -105,6 +105,9 @@ python3 tools/export_report.py soil.csv -o report.md --start 2026-08-16T21:00
   drying speeds up in warm/dry air, so the current moisture-only slope over-
   or underestimates. Needs an external temp/RH sensor (e.g. SHT31 or DHT22 on
   the left Grove I2C port; the Wio Terminal has none onboard).
+- Home Assistant integration — publish moisture/rate/ETA over WiFi (onboard
+  RTL8720) via MQTT so HA discovers the plant as a sensor entity; alerts and
+  history then live in HA alongside the on-device display.
 
 ## Repo layout
 

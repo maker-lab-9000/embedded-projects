@@ -6,8 +6,9 @@ until the plant needs watering.
 
 > **Status (2026-08-16):** Milestones 1–3 complete, plus SD logging from
 > Milestone 4 (`firmware/m4_sdlog` is on the device). Remaining M4 ideas:
-> sensors #2–5, WiFi/MQTT, temperature/humidity input to the ETA formula
-> (needs an external temp/RH sensor). See README.md for current usage.
+> sensors #2–5, WiFi/MQTT → Home Assistant, temperature/humidity input to the
+> ETA formula (needs an external temp/RH sensor). See README.md for current
+> usage.
 
 ---
 
