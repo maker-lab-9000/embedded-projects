@@ -80,6 +80,13 @@ python3 tools/export_report.py soil.csv -o report.md --start 2026-08-16T21:00
 
 `--start` anchors minute 0 to a real timestamp.
 
+## To do
+
+- Factor ambient temperature and humidity into the watering ETA formula —
+  drying speeds up in warm/dry air, so the current moisture-only slope over-
+  or underestimates. Needs an external temp/RH sensor (e.g. SHT31 or DHT22 on
+  the left Grove I2C port; the Wio Terminal has none onboard).
+
 ## Repo layout
 
 ```
