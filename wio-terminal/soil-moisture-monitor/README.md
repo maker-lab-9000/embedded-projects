@@ -5,6 +5,9 @@ sensors (v1.2). Shows live moisture %, drying rate and a "water in ~X days"
 estimate on the LCD, chirps when the plant needs water, and logs one sample
 per minute to microSD so history survives reboots.
 
+<img src="docs/monitor.jpg" width="440" alt="Wio Terminal on a windowsill between two plant pots, showing 75% soil moisture, drying-rate status and a 48h trend chart">
+
+
 **Maintainer:** George Babanau · actively maintained (Aug 2026)
 
 ## Hardware
