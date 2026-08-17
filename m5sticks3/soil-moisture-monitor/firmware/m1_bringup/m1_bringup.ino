@@ -33,12 +33,23 @@ void setup() {
   analogSetPinAttenuation(SENSOR_PIN, ADC_11db);  // usable range ~0-3.1 V
   M5.Display.setRotation(1);
   M5.Display.setTextSize(2);
-  M5.Display.drawString("m1 bringup - see serial", 4, 60);
+  M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Display.drawString("m1 bringup", 4, 4);
 }
 
 void loop() {
   uint16_t raw = readSensorRaw();
   uint32_t mv = analogReadMilliVolts(SENSOR_PIN);
   Serial.printf("raw=%4u  mv=%4lu\n", raw, (unsigned long)mv);
+
+  // Readings on the LCD too, so bring-up doesn't depend on the serial link.
+  char line[24];
+  M5.Display.setTextSize(3);
+  M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+  snprintf(line, sizeof(line), "raw %4u ", raw);
+  M5.Display.drawString(line, 4, 40);
+  snprintf(line, sizeof(line), "%4lu mV ", (unsigned long)mv);
+  M5.Display.drawString(line, 4, 80);
+
   delay(1000);
 }
