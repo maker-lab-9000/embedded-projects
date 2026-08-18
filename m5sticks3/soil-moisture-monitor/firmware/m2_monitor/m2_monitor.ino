@@ -5,6 +5,7 @@
 // Port: /dev/cu.usbmodem14101 (native USB CDC; opening the port resets the device)
 
 #include <M5Unified.h>
+#include <LittleFS.h>
 
 // ---- calibration (sensor #2, see CALIBRATION.md) ----
 const uint16_t RAW_AIR   = 3573;  // 0 %
@@ -19,6 +20,13 @@ const int      HISTORY_LEN      = 2880;    // 48 h of 1-min samples
 const long     RATE_WINDOW      = 360;     // fit over at most 6 h
 const long     RATE_MIN_SAMPLES = 30;
 const float    WATERING_JUMP    = 5.0f;
+
+const char*    LOG_PATH  = "/soil.csv";
+const char*    OLD_PATH  = "/soil.old.csv";
+const uint32_t ROTATE_AT_BYTES    = 1500000;  // ~7 weeks per file
+const uint32_t RESTORE_TAIL_BYTES = 90000;
+
+bool fsOk = false;
 
 float history[HISTORY_LEN];
 long  totalSamples = 0;
@@ -56,6 +64,92 @@ uint16_t readSensorRaw() {
 float rawToPercent(uint16_t raw) {
   float pct = 100.0f * (float)(RAW_AIR - raw) / (float)(RAW_AIR - RAW_WATER);
   return constrain(pct, 0.0f, 100.0f);
+}
+
+// ---------- filesystem ----------
+
+bool initFs() {
+  fsOk = LittleFS.begin(true);  // true = format on first mount
+  return fsOk;
+}
+
+void rotateIfNeeded() {
+  File f = LittleFS.open(LOG_PATH, "r");
+  if (!f) return;
+  uint32_t size = f.size();
+  f.close();
+  if (size < ROTATE_AT_BYTES) return;
+  LittleFS.remove(OLD_PATH);
+  LittleFS.rename(LOG_PATH, OLD_PATH);
+  File nf = LittleFS.open(LOG_PATH, "w");
+  if (nf) {
+    nf.println("boot,minute,sensor,raw,pct");
+    nf.close();
+  }
+}
+
+bool appendLog(uint16_t raw, float pct) {
+  File f = LittleFS.open(LOG_PATH, "a");
+  if (!f) return false;
+  f.printf("%d,%ld,%d,%u,%.2f\n", bootId, minuteIdx, SENSOR_ID, raw, pct);
+  f.close();
+  rotateIfNeeded();
+  return true;
+}
+
+void restoreHistory() {
+  if (!fsOk || !LittleFS.exists(LOG_PATH)) {
+    if (fsOk) {
+      File f = LittleFS.open(LOG_PATH, "w");
+      if (f) { f.println("boot,minute,sensor,raw,pct"); f.close(); }
+    }
+    return;
+  }
+  File f = LittleFS.open(LOG_PATH, "r");
+  if (!f) return;
+  uint32_t size = f.size();
+  if (size > RESTORE_TAIL_BYTES) {
+    f.seek(size - RESTORE_TAIL_BYTES);
+    f.readStringUntil('\n');
+  }
+  long lastBoot = 0, lastMinute = -1;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    if (line.startsWith("#RESET")) {
+      totalSamples = 0;  // probe was moved: discard everything before this
+      continue;
+    }
+    int b, sensor;
+    long m;
+    unsigned int raw;
+    float pct;
+    if (sscanf(line.c_str(), "%d,%ld,%d,%u,%f", &b, &m, &sensor, &raw, &pct) == 5) {
+      history[totalSamples % HISTORY_LEN] = pct;
+      totalSamples++;
+      lastBoot = b;
+      lastMinute = m;
+    }
+  }
+  f.close();
+  bootId = (int)lastBoot + 1;
+  minuteIdx = lastMinute + 1;
+  segmentStart = totalSamples;  // trend restarts: off-time is unknown
+  if (totalSamples > 0) lowAlerted = histAt(totalSamples - 1) <= WATER_THRESHOLD;
+  Serial.printf("RESTORED,%ld,boot=%d\n", totalSamples, bootId);
+}
+
+void handleSerial() {
+  if (!Serial.available()) return;
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  if (cmd != "DUMP") return;
+  for (const char* p : {OLD_PATH, LOG_PATH}) {
+    File f = LittleFS.open(p, "r");
+    if (!f) continue;
+    while (f.available()) Serial.write(f.read());
+    f.close();
+  }
+  Serial.println("#DUMP_END");
 }
 
 // ---------- trend ----------
@@ -159,6 +253,17 @@ void drawHeader() {
   M5.Display.drawString("Soil Moisture #2", 0, 0);
 }
 
+void drawFsBadge() {
+  M5.Display.setTextSize(2);
+  if (fsOk) {
+    M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
+    M5.Display.drawString("FS ", 204, 0);
+  } else {
+    M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+    M5.Display.drawString("FS!", 204, 0);
+  }
+}
+
 void drawLive(float pct, uint16_t raw) {
   uint16_t color = pct < WATER_THRESHOLD ? TFT_RED
                  : (pct < 50 ? TFT_YELLOW : TFT_GREEN);
@@ -195,14 +300,20 @@ void setup() {
   M5.Display.setRotation(1);
   M5.Display.fillScreen(TFT_BLACK);
   drawHeader();
+
+  initFs();
+  restoreHistory();
+  drawFsBadge();
   drawSparkline();
-  drawTrend(0);
+  if (totalSamples > 0) lastMean = histAt(totalSamples - 1);
+  drawTrend(lastMean);
 
   lastLogMs = millis();
 }
 
 void loop() {
   M5.update();
+  handleSerial();
 
   if (millis() - lastSenseMs >= 1000) {
     lastSenseMs = millis();
@@ -220,6 +331,10 @@ void loop() {
       lastMean = mean;
 
       commitToHistory(mean);
+
+      if (!fsOk) initFs();
+      if (fsOk && !appendLog(raw, mean)) fsOk = false;
+      drawFsBadge();
       minuteIdx++;
 
       drawSparkline();
