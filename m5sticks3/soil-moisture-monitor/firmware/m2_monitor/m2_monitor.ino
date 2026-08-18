@@ -224,17 +224,21 @@ void drawTrend(float pct) {
     snprintf(line, sizeof(line), "%2ld/%ldm    ", have, RATE_MIN_SAMPLES);
     M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
     M5.Display.drawString(line, 104, 24);
-    M5.Display.drawString("ETA --     ", 104, 44);
-    return;
+  } else {
+    snprintf(line, sizeof(line), "%+5.2f %%/h ", rate);
+    M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    M5.Display.drawString(line, 104, 24);
   }
 
-  snprintf(line, sizeof(line), "%+5.2f %%/h ", rate);
-  M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  M5.Display.drawString(line, 104, 24);
-
-  if (pct <= WATER_THRESHOLD) {
+  // Dry soil needs no rate estimate: WATER NOW! overrides every other ETA
+  // state, warm-up included. totalSamples guard avoids a false alarm on a
+  // first boot with no reading yet (pct defaults to 0).
+  if (pct <= WATER_THRESHOLD && totalSamples > 0) {
     M5.Display.setTextColor(TFT_RED, TFT_BLACK);
     M5.Display.drawString("WATER NOW! ", 104, 44);
+  } else if (!haveRate) {
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Display.drawString("ETA --     ", 104, 44);
   } else if (rate >= -0.005f) {
     M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
     M5.Display.drawString("not drying ", 104, 44);

@@ -78,8 +78,8 @@ What each element on the dashboard means and the values it can show:
 
 The rate/ETA/chart refresh once per logging minute; the trend fit restarts
 (→ `N/30m`) after a reboot, a watering event (> +5 points in 5 min), or a
-KEY2 trend reset. Note `WATER NOW!` only replaces the ETA text once a rate
-exists — during the 30-min warm-up the chirp is the low-moisture alert.
+KEY2 trend reset. `WATER NOW!` overrides every other ETA state, warm-up
+included (it needs no rate estimate — dry is dry).
 
 ## Data
 

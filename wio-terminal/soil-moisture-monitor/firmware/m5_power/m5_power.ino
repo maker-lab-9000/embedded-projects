@@ -237,17 +237,21 @@ void drawTrend(float pct) {
     snprintf(line, sizeof(line), "Rate: collecting %2ld/%ldm ", have, RATE_MIN_SAMPLES);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.drawString(line, 20, 92);
-    tft.drawString("ETA:  --                ", 20, 116);
-    return;
+  } else {
+    snprintf(line, sizeof(line), "Rate: %+5.2f %%/h        ", rate);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString(line, 20, 92);
   }
 
-  snprintf(line, sizeof(line), "Rate: %+5.2f %%/h        ", rate);
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  tft.drawString(line, 20, 92);
-
-  if (pct <= WATER_THRESHOLD) {
+  // Dry soil needs no rate estimate: WATER NOW! overrides every other ETA
+  // state, warm-up included. totalSamples guard avoids a false alarm on a
+  // first boot with no reading yet (pct defaults to 0).
+  if (pct <= WATER_THRESHOLD && totalSamples > 0) {
     tft.setTextColor(TFT_RED, TFT_BLACK);
     tft.drawString("WATER NOW!              ", 20, 116);
+  } else if (!haveRate) {
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.drawString("ETA:  --                ", 20, 116);
   } else if (rate >= -0.005f) {
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.drawString("ETA:  not drying         ", 20, 116);

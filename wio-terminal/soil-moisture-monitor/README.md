@@ -67,7 +67,7 @@ What each element on the dashboard means and the values it can show:
 | `SD` / `SD!` (top right) | SD card status | green `SD` = logging OK; red `SD!` = no card or write failed (remount retried every minute) |
 | `76%` (large) | calibrated moisture, live reading (1 s refresh) | `0%`–`100%`, clamped; red < 30%, yellow 30–49%, green ≥ 50% |
 | `Rate:` | drying rate — least-squares slope over the last ≤ 6 h of 1-min means | `collecting N/30m` (`N` = 0–29) for the first 30 min after boot/watering/reset, then signed `±D.DD %/h` (typically −3…+3; positive = getting wetter) |
-| `ETA:` | time until the 30% watering threshold, linear extrapolation | `--` (still collecting) · `not drying` (rate ≥ −0.005 %/h) · `Water in ~Dd HHh` (days 0–99, hours 00–23) · `>99 days` · red `WATER NOW!` + chirp at ≤ 30% |
+| `ETA:` | time until the 30% watering threshold, linear extrapolation | `--` (still collecting) · `not drying` (rate ≥ −0.005 %/h) · `Water in ~Dd HHh` (days 0–99, hours 00–23) · `>99 days` · red `WATER NOW!` + chirp at ≤ 30% (overrides every other state, warm-up included) |
 | chart | last 48 h of 1-min moisture means (cyan), restored from SD on boot | y-axis fixed 0–100%; red dotted line = 30% threshold |
 | `raw` | latest 12-bit ADC median (lower = wetter) | 0–4095 theoretical; ~1570 (water) to ~3690 (dry air) at 3.3 V — pinned near 0/4095 means a wiring fault |
 | `up H:MM` | time since power-on | hours unbounded, resets each boot (unlike the CSV `minute` counter, which persists) |
