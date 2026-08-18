@@ -27,6 +27,8 @@ const uint32_t ROTATE_AT_BYTES    = 1500000;  // ~7 weeks per file
 const uint32_t RESTORE_TAIL_BYTES = 90000;
 
 bool fsOk = false;
+bool screenOn = true;
+bool keyBFired = false;
 
 float history[HISTORY_LEN];
 long  totalSamples = 0;
@@ -189,6 +191,7 @@ int sparkY(float pct) {
 }
 
 void drawSparkline() {
+  if (!screenOn) return;
   M5.Display.fillRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_BLACK);
   M5.Display.drawRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_DARKGREY);
   int yThr = sparkY(WATER_THRESHOLD);
@@ -210,6 +213,7 @@ void drawSparkline() {
 }
 
 void drawTrend(float pct) {
+  if (!screenOn) return;
   char line[32];
   M5.Display.setTextSize(2);
 
@@ -248,12 +252,14 @@ void drawTrend(float pct) {
 }
 
 void drawHeader() {
+  if (!screenOn) return;
   M5.Display.setTextSize(2);
   M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   M5.Display.drawString("Soil Moisture #2", 0, 0);
 }
 
 void drawFsBadge() {
+  if (!screenOn) return;
   M5.Display.setTextSize(2);
   if (fsOk) {
     M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
@@ -265,6 +271,7 @@ void drawFsBadge() {
 }
 
 void drawLive(float pct, uint16_t raw) {
+  if (!screenOn) return;
   uint16_t color = pct < WATER_THRESHOLD ? TFT_RED
                  : (pct < 50 ? TFT_YELLOW : TFT_GREEN);
   char buf[8];
@@ -286,6 +293,56 @@ void drawLive(float pct, uint16_t raw) {
   M5.Display.setTextSize(1);
   M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
   M5.Display.drawString(diag, 4, 124);
+}
+
+// ---------- controls ----------
+
+void chirp() {
+  M5.Speaker.tone(1800, 120);
+  delay(180);
+  M5.Speaker.tone(1400, 200);
+}
+
+void setScreen(bool on) {
+  screenOn = on;
+  if (on) {
+    M5.Display.wakeup();
+    M5.Display.setBrightness(80);
+    M5.Display.fillScreen(TFT_BLACK);
+    drawHeader();
+    drawFsBadge();
+    drawSparkline();
+    drawTrend(lastMean);
+  } else {
+    M5.Display.setBrightness(0);
+    M5.Display.sleep();
+  }
+}
+
+// After moving the probe: forget the old spot's history, mark it in the log.
+void restartTrends() {
+  totalSamples = 0;
+  segmentStart = 0;
+  accumPct = 0;
+  accumN = 0;
+  if (fsOk) {
+    File f = LittleFS.open(LOG_PATH, "a");
+    if (f) { f.printf("#RESET,%ld\n", minuteIdx); f.close(); }
+  }
+  Serial.printf("TRENDS_RESET,%ld\n", minuteIdx);
+  chirp();
+  drawSparkline();
+  drawTrend(lastMean);
+}
+
+void pollButtons() {
+  if (M5.BtnA.wasClicked()) setScreen(!screenOn);
+
+  if (M5.BtnB.pressedFor(3000)) {
+    if (!keyBFired) { keyBFired = true; restartTrends(); }
+  } else if (M5.BtnB.wasReleased()) {
+    keyBFired = false;
+  }
 }
 
 // ---------- main ----------
@@ -314,6 +371,7 @@ void setup() {
 void loop() {
   M5.update();
   handleSerial();
+  pollButtons();
 
   if (millis() - lastSenseMs >= 1000) {
     lastSenseMs = millis();
@@ -339,6 +397,13 @@ void loop() {
 
       drawSparkline();
       drawTrend(mean);
+
+      if (mean <= WATER_THRESHOLD && !lowAlerted) {
+        lowAlerted = true;
+        chirp();
+      } else if (mean > WATER_THRESHOLD + 5) {
+        lowAlerted = false;
+      }
     }
   }
 
