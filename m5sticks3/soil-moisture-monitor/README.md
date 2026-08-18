@@ -7,6 +7,8 @@ same measurements. Shows live moisture %, drying rate and a "water in ~X days"
 estimate on the LCD, chirps when the plant needs water, and logs one sample
 per minute to internal flash so history survives reboots.
 
+<img src="docs/monitor.jpg" width="440" alt="M5StickS3 wired to the soil sensor in a plant pot, showing 72% moisture, the 4/30m rate warm-up, a trend chart with the watering rise, and battery level">
+
 **Maintainer:** George Babanau · actively maintained (Aug 2026)
 
 ## Hardware
