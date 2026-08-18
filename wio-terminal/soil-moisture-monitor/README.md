@@ -15,6 +15,9 @@ per minute to microSD so history survives reboots.
 - Seeed Wio Terminal (SAMD51 — 3.3 V logic, GPIO **not** 5 V tolerant)
 - Capacitive Soil Moisture Sensor v1.2, powered from 3.3 V
 - microSD card formatted **FAT32** (factory exFAT on 64 GB+ cards will not mount)
+- optional: Wio Terminal battery chassis (650 mAh) — its BQ27441 fuel gauge is
+  auto-detected at boot and adds a `bat NN%` readout (older chassis without the
+  gauge, or plain USB power, simply shows no battery field)
 
 Wiring on the rear 40-pin header:
 
@@ -53,7 +56,8 @@ arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal --export-binaries f
 arduino-cli upload  --fqbn Seeeduino:samd:seeed_wio_terminal -p /dev/cu.usbmodemXXX firmware/m4_sdlog
 ```
 
-Requires the Seeed SAMD board package and the "Seeed Arduino FS" library.
+Requires the Seeed SAMD board package, the "Seeed Arduino FS" library and the
+"SparkFun BQ27441 LiPo Fuel Gauge" library (battery chassis support).
 Per-sensor calibration anchors live at the top of each sketch — see
 [CALIBRATION.md](CALIBRATION.md).
 
@@ -70,6 +74,7 @@ What each element on the dashboard means and the values it can show:
 | `ETA:` | time until the 30% watering threshold, linear extrapolation | `--` (still collecting) · `not drying` (rate ≥ −0.005 %/h) · `Water in ~Dd HHh` (days 0–99, hours 00–23) · `>99 days` · red `WATER NOW!` + chirp at ≤ 30% (overrides every other state, warm-up included) |
 | chart | last 48 h of 1-min moisture means (cyan), restored from SD on boot | y-axis fixed 0–100%; red dotted line = 30% threshold |
 | `raw` | latest 12-bit ADC median (lower = wetter) | 0–4095 theoretical; ~1570 (water) to ~3690 (dry air) at 3.3 V — pinned near 0/4095 means a wiring fault |
+| `bat NN%` | battery level from the chassis fuel gauge | 0–100%; only shown when the 650 mAh battery chassis (BQ27441) is detected at boot |
 | `up H:MM` | time since power-on | hours unbounded, resets each boot (unlike the CSV `minute` counter, which persists) |
 
 The rate/ETA/chart refresh once per logging minute; the trend fit restarts

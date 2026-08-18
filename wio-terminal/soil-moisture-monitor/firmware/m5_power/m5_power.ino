@@ -15,6 +15,8 @@
 #include <TFT_eSPI.h>
 #include <Seeed_FS.h>
 #include "SD/Seeed_SD.h"
+#include <Wire.h>
+#include <SparkFunBQ27441.h>  // fuel gauge on the 650 mAh battery chassis
 
 // ---- calibration (sensor #1, see CALIBRATION.md) ----
 const uint16_t RAW_AIR   = 3687;  // 0 %
@@ -41,6 +43,7 @@ long  totalSamples = 0;
 long  segmentStart = 0;
 
 bool  sdOk = false;
+bool  batOk = false;  // BQ27441 fuel gauge present (650 mAh battery chassis)
 int   bootId = 1;
 long  minuteIdx = 0;
 
@@ -280,11 +283,16 @@ void drawLive(float pct, uint16_t raw) {
 
   char diag[40];
   uint32_t upMin = millis() / 60000;
-  snprintf(diag, sizeof(diag), "raw %4u   up %lu:%02lu   ", raw,
-           (unsigned long)(upMin / 60), (unsigned long)(upMin % 60));
+  if (batOk) {
+    snprintf(diag, sizeof(diag), "raw %4u bat %3u%% up %lu:%02lu ", raw,
+             lipo.soc(), (unsigned long)(upMin / 60), (unsigned long)(upMin % 60));
+  } else {
+    snprintf(diag, sizeof(diag), "raw %4u   up %lu:%02lu       ", raw,
+             (unsigned long)(upMin / 60), (unsigned long)(upMin % 60));
+  }
   tft.setTextSize(2);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.drawString(diag, 20, 214);
+  tft.drawString(diag, 8, 214);
 }
 
 void drawHeader() {
@@ -365,6 +373,11 @@ void setup() {
   pinMode(WIO_KEY_C, INPUT_PULLUP);
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
+
+  // Fuel gauge is optional: present only on the 650 mAh battery chassis.
+  Wire.begin();
+  batOk = lipo.begin();
+  if (batOk) lipo.setCapacity(650);
 
   tft.begin();
   tft.setRotation(3);
