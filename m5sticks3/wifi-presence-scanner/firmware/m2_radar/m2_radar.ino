@@ -16,6 +16,14 @@ const int      NEAR_DBM    = -55;
 const int      NEARBY_DBM  = -75;
 const float    RSSI_ALPHA  = 0.3f;
 
+const uint32_t SPARK_PERIOD_MS = 15000;   // 236 samples * 15 s ~= 59 min
+const int SPARK_X = 2, SPARK_Y = 64, SPARK_W = 236, SPARK_H = 44;
+const int SPARK_N = SPARK_W;  // one sample per column max
+
+int spark[SPARK_N];
+int sparkLen = 0;
+uint32_t lastSparkMs = 0;
+
 struct Device { uint8_t mac[6]; uint32_t lastSeenMs; float rssiEma; uint8_t kind; };
 Device table[TABLE_LEN];
 int tableCount = 0;
@@ -113,6 +121,80 @@ int countAPs() {
 uint32_t lastTickMs = 0, lastHopMs = 0;
 int channel = CHANNEL_MIN;
 
+// ---------- display ----------
+
+uint16_t countColor(int n) {
+  if (n == 0) return TFT_DARKGREY;
+  if (n <= 3) return TFT_GREEN;
+  if (n <= 9) return TFT_YELLOW;
+  return TFT_RED;
+}
+
+void drawCounts() {
+  char line[24];
+  int nearby = countNearby();
+
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  M5.Display.drawString("WiFi Radar", 0, 0);
+  snprintf(line, sizeof(line), "ch %2d ", channel);
+  M5.Display.drawString(line, 160, 0);
+
+  snprintf(line, sizeof(line), "%3d", nearby);   // number only (size 4 = ~72 px)
+  M5.Display.setTextSize(4);
+  M5.Display.setTextColor(countColor(nearby), TFT_BLACK);
+  M5.Display.drawString(line, 0, 20);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.drawString("near", 4, 54);
+
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  snprintf(line, sizeof(line), "%3d devs ", countTotalDevices());
+  M5.Display.drawString(line, 104, 24);
+  snprintf(line, sizeof(line), "%3d APs ", countAPs());
+  M5.Display.drawString(line, 104, 44);
+}
+
+void drawSparkline() {
+  M5.Display.fillRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_BLACK);
+  M5.Display.drawRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_DARKGREY);
+  if (sparkLen < 2) return;
+  int mx = 5;
+  for (int i = 0; i < sparkLen; i++) if (spark[i] > mx) mx = spark[i];
+  int prevX = -1, prevY = 0;
+  for (int i = 0; i < sparkLen; i++) {
+    int x = SPARK_X + 2 + (int)((long)(SPARK_W - 4) * i / (SPARK_N - 1));
+    int y = SPARK_Y + SPARK_H - 2 - (int)((SPARK_H - 4) * spark[i] / mx);
+    if (prevX >= 0) M5.Display.drawLine(prevX, prevY, x, y, TFT_CYAN);
+    prevX = x; prevY = y;
+  }
+}
+
+void drawDiag(uint32_t fps) {
+  char diag[48];
+  uint32_t upMin = millis() / 60000;
+  int bat = M5.Power.getBatteryLevel();
+  if (bat >= 0)
+    snprintf(diag, sizeof(diag), "fps %3lu  bat %3d%%  up %lu:%02lu  ",
+             (unsigned long)fps, bat, (unsigned long)(upMin/60), (unsigned long)(upMin%60));
+  else
+    snprintf(diag, sizeof(diag), "fps %3lu  bat --  up %lu:%02lu  ",
+             (unsigned long)fps, (unsigned long)(upMin/60), (unsigned long)(upMin%60));
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  M5.Display.drawString(diag, 4, 124);
+}
+
+void pushSpark(int v) {
+  if (sparkLen < SPARK_N) {
+    spark[sparkLen++] = v;
+  } else {
+    for (int i = 1; i < SPARK_N; i++) spark[i-1] = spark[i];
+    spark[SPARK_N-1] = v;
+  }
+}
+
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
@@ -124,6 +206,8 @@ void setup() {
   esp_wifi_set_promiscuous(true);
   esp_wifi_set_promiscuous_rx_cb(&onRx);
   esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+
+  drawSparkline();  // empty box immediately
 }
 
 void loop() {
@@ -143,6 +227,13 @@ void loop() {
     portEXIT_CRITICAL(&tableMux);
     uint32_t fps = framesSinceTick;
     framesSinceTick = 0;
+    drawCounts();
+    drawDiag(fps);
+    if (millis() - lastSparkMs >= SPARK_PERIOD_MS) {
+      lastSparkMs = millis();
+      pushSpark(countNearby());
+      drawSparkline();
+    }
     Serial.printf("nearby=%d devs=%d aps=%d fps=%lu ch=%d\n",
                   countNearby(), countTotalDevices(), countAPs(),
                   (unsigned long)fps, channel);
