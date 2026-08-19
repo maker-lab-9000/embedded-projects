@@ -1,0 +1,6 @@
+firmware/*/build/
+secrets.h
+generated_entities.h
+.env
+.DS_Store
+*.uf2
