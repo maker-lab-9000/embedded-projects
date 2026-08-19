@@ -49,6 +49,13 @@ arduino-cli compile --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM
 arduino-cli upload  --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM=opi,PartitionScheme=default_8MB" -p /dev/cu.usbmodemXXX firmware/m2_radar
 ```
 
+Controls: **click KEY1** (front face button) to toggle the screen off/on
+(scanning continues with it off — the backlight dominates battery draw);
+**hold KEY2 for 3 s** (small button next to the side reset button) to clear the
+device window and chart, with a confirming chirp. The **side button** is the
+system reset (single-click boots, double-click powers off, long-press enters
+download mode).
+
 Requires the `esp32:esp32` core and the M5Unified library. Native-USB ESP32-S3
 serial quirks (shared with the sibling soil monitor): **opening the serial port
 resets the device**; after a flash the chip parks in download mode — **single-
@@ -88,13 +95,6 @@ Only aggregate counts appear on screen.
 The radio receives continuously, so expect roughly **2–3 hours** on the 250 mAh
 cell — this is a walk-around toy, not an all-day logger. Runs indefinitely on
 USB power.
-
-## To do
-
-- On-device controls (designed, not yet implemented): **KEY1** click to toggle
-  the screen off/on while scanning continues (the backlight dominates battery
-  draw), and **KEY2** hold 3 s to clear the window and chart with a confirming
-  chirp.
 
 ## Repo layout
 

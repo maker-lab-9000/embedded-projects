@@ -120,6 +120,8 @@ int countAPs() {
 
 uint32_t lastTickMs = 0, lastHopMs = 0;
 int channel = CHANNEL_MIN;
+bool screenOn = true;
+bool keyBFired = false;
 
 // ---------- display ----------
 
@@ -131,6 +133,7 @@ uint16_t countColor(int n) {
 }
 
 void drawCounts() {
+  if (!screenOn) return;
   char line[24];
   int nearby = countNearby();
 
@@ -157,6 +160,7 @@ void drawCounts() {
 }
 
 void drawSparkline() {
+  if (!screenOn) return;
   M5.Display.fillRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_BLACK);
   M5.Display.drawRect(SPARK_X, SPARK_Y, SPARK_W, SPARK_H, TFT_DARKGREY);
   if (sparkLen < 2) return;
@@ -172,6 +176,7 @@ void drawSparkline() {
 }
 
 void drawDiag(uint32_t fps) {
+  if (!screenOn) return;
   char diag[48];
   uint32_t upMin = millis() / 60000;
   int bat = M5.Power.getBatteryLevel();
@@ -195,6 +200,46 @@ void pushSpark(int v) {
   }
 }
 
+// ---------- controls ----------
+
+void chirp() {
+  M5.Speaker.tone(1800, 120);
+  delay(180);
+  M5.Speaker.tone(1400, 200);
+}
+
+void setScreen(bool on) {
+  screenOn = on;
+  if (on) {
+    M5.Display.wakeup();
+    M5.Display.setBrightness(80);
+    M5.Display.fillScreen(TFT_BLACK);
+    drawSparkline();  // counts/diag repaint on the next tick
+  } else {
+    M5.Display.setBrightness(0);
+    M5.Display.sleep();
+  }
+}
+
+void resetWindow() {
+  portENTER_CRITICAL(&tableMux);
+  tableCount = 0;
+  portEXIT_CRITICAL(&tableMux);
+  sparkLen = 0;
+  if (screenOn) drawSparkline();
+  chirp();
+  Serial.println("WINDOW_RESET");
+}
+
+void pollButtons() {
+  if (M5.BtnA.wasClicked()) setScreen(!screenOn);
+  if (M5.BtnB.pressedFor(3000)) {
+    if (!keyBFired) { keyBFired = true; resetWindow(); }
+  } else if (M5.BtnB.wasReleased()) {
+    keyBFired = false;
+  }
+}
+
 void setup() {
   auto cfg = M5.config();
   M5.begin(cfg);
@@ -212,6 +257,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  pollButtons();
 
   if (millis() - lastHopMs >= DWELL_MS) {
     lastHopMs = millis();
