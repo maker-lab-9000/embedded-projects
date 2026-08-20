@@ -46,13 +46,13 @@ secrets = "\n".join([
 ]) + "\n"
 
 # entities: control light first, then DISPLAY_ENTITIES
-rows = ['  {%s, %s, CONTROL, ""},' % (cstr(env["LIGHT_ENTITY"]), cstr(env["LIGHT_LABEL"]))]
+rows = ['  {%s, %s, ENT_CONTROL, ""},' % (cstr(env["LIGHT_ENTITY"]), cstr(env["LIGHT_LABEL"]))]
 for item in [x for x in env.get("DISPLAY_ENTITIES", "").split(";") if x.strip()]:
     parts = item.split("|")
     if len(parts) != 3:
         die("bad DISPLAY_ENTITIES item (need id|label|unit): " + item)
     eid, label, unit = (p.strip() for p in parts)
-    rows.append('  {%s, %s, DISPLAY, %s},' % (cstr(eid), cstr(label), cstr(unit)))
+    rows.append('  {%s, %s, ENT_DISPLAY, %s},' % (cstr(eid), cstr(label), cstr(unit)))
 
 entities = "\n".join([
     "// AUTO-GENERATED from .env by tools/gen_config.py - do not edit, gitignored.",
