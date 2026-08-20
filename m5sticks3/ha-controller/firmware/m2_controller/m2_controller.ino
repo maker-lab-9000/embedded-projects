@@ -151,10 +151,29 @@ void drawControls() {
   }
 }
 
+void drawDashboard() {
+  M5.Display.fillRect(0, 20, 240, 115, TFT_BLACK);
+  M5.Display.setTextSize(2);
+  int y = 24;
+  for (int i = 0; i < ENTITY_COUNT && y < 120; i++) {
+    if (ENTITIES[i].role != ENT_DISPLAY) continue;
+    M5.Display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    M5.Display.drawString(ENTITIES[i].label, 6, y);
+    char val[32];
+    snprintf(val, sizeof(val), "%s%s%s",
+             cache[i].valid ? cache[i].state : "...",
+             (cache[i].valid && ENTITIES[i].unit[0]) ? " " : "",
+             cache[i].valid ? ENTITIES[i].unit : "");
+    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Display.drawString(val, 130, y);
+    y += 22;
+  }
+}
+
 void drawAll() {
   drawHeader();
   if (page == PAGE_CONTROLS) drawControls();
-  // dashboard drawn in Task 5
+  else drawDashboard();
 }
 
 // ---------- controls ----------
