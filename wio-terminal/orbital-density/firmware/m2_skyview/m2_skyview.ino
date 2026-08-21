@@ -15,11 +15,13 @@
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
+TFT_eSprite spr = TFT_eSprite(&tft);   // off-screen buffer: draw here, blit once (no flicker)
 
 bool batOk = false;            // BQ27441 present (battery chassis)
 bool screenOn = true;
 bool prev5s = HIGH;
 void setScreen(bool on);       // defined after the draw functions
+void drawPage();
 
 enum Constel { C_GPS, C_GLO, C_GAL, C_BDS, C_QZS, C_OTHER };
 struct Sat { uint8_t constel; uint8_t prn; int8_t elev; int16_t azim; uint8_t snr; uint32_t seen; };
@@ -142,47 +144,47 @@ uint16_t constelColor(uint8_t c) {
 int countPositioned() { int n=0; for (int i=0;i<satCount;i++) if (sats[i].elev>=0) n++; return n; }
 
 void drawHeader() {
-  tft.fillRect(0, 0, 320, 20, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.fillRect(0, 0, 320, 20, TFT_BLACK);
+  spr.setTextSize(2);
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
   char h[40];
   snprintf(h, sizeof(h), "V %2d  U %2d  %s",
            countInView(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0, fixStr());
-  tft.drawString(h, 4, 2);
+  spr.drawString(h, 4, 2);
   if (batOk) {
     int soc = lipo.soc();
     uint16_t bc = soc > 50 ? TFT_GREEN : (soc > 20 ? TFT_YELLOW : TFT_RED);
     char b[8]; snprintf(b, sizeof(b), "%3d%%", soc);
-    tft.setTextColor(bc, TFT_BLACK);
-    tft.drawString(b, 232, 2);
+    spr.setTextColor(bc, TFT_BLACK);
+    spr.drawString(b, 232, 2);
   }
 }
 
 void drawLegend() {
   const char* names[] = {"GPS","GLO","GAL","BDS"};
   uint8_t cs[] = {C_GPS,C_GLO,C_GAL,C_BDS};
-  tft.setTextSize(1);
+  spr.setTextSize(1);
   int y = 26;
   for (int i = 0; i < 4; i++) {
-    tft.fillRect(288, y, 8, 8, constelColor(cs[i]));
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tft.drawString(names[i], 300, y);
+    spr.fillRect(288, y, 8, 8, constelColor(cs[i]));
+    spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    spr.drawString(names[i], 300, y);
     y += 12;
   }
 }
 
 void drawSky() {
-  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
-  tft.drawCircle(CX, CY, R, TFT_DARKGREY);
-  tft.drawCircle(CX, CY, R * 2 / 3, TFT_DARKGREY);
-  tft.drawCircle(CX, CY, R / 3, TFT_DARKGREY);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.drawString("N", CX - 2, CY - R - 10);
-  tft.drawString("S", CX - 2, CY + R + 2);
-  tft.drawString("E", CX + R + 2, CY - 3);
-  tft.drawString("W", CX - R - 10, CY - 3);
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.drawCircle(CX, CY, R, TFT_DARKGREY);
+  spr.drawCircle(CX, CY, R * 2 / 3, TFT_DARKGREY);
+  spr.drawCircle(CX, CY, R / 3, TFT_DARKGREY);
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("N", CX - 2, CY - R - 10);
+  spr.drawString("S", CX - 2, CY + R + 2);
+  spr.drawString("E", CX + R + 2, CY - 3);
+  spr.drawString("W", CX - R - 10, CY - 3);
   drawLegend();
   for (int i = 0; i < satCount; i++) {
     if (sats[i].elev < 0) continue;   // position not yet known: skip on the map
@@ -191,14 +193,14 @@ void drawSky() {
     int x = CX + (int)(r * sinf(a));
     int y = CY - (int)(r * cosf(a));
     int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
-    tft.fillCircle(x, y, rad, constelColor(sats[i].constel));
+    spr.fillCircle(x, y, rad, constelColor(sats[i].constel));
   }
   // how many are heard but not yet placed (no fix / no ephemeris)
   int unp = countInView() - countPositioned();
   if (unp > 0) {
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
     char u[24]; snprintf(u, sizeof(u), "%d unlocated", unp);
-    tft.drawString(u, 4, 228);
+    spr.drawString(u, 4, 228);
   }
 }
 
@@ -224,10 +226,10 @@ uint32_t lastLogMs = 0;
 int strongestSnr() { int m=0; for (int i=0;i<satCount;i++) if (sats[i].snr>m) m=sats[i].snr; return m; }
 
 void drawDetail() {
-  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
-  tft.setTextSize(2);
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.setTextSize(2);
   char l[48]; int y = 30;
-  auto row = [&](const char* s){ tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK); tft.drawString(s, 8, y); y += 24; };
+  auto row = [&](const char* s){ spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString(s, 8, y); y += 24; };
   snprintf(l, sizeof(l), "In view: %d  (pos %d)", countInView(), countPositioned()); row(l);
   snprintf(l, sizeof(l), "GPS %d GLO %d", countConstel(C_GPS), countConstel(C_GLO)); row(l);
   snprintf(l, sizeof(l), "GAL %d BDS %d", countConstel(C_GAL), countConstel(C_BDS)); row(l);
@@ -248,7 +250,7 @@ void drawDetail() {
 
 void pollButtons() {
   bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 3; if (screenOn) tft.fillScreen(TFT_BLACK); }
+  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 3; if (screenOn) drawPage(); }
   prevKeyC = k;
 
   bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
@@ -268,41 +270,41 @@ void pushHist(int v, int u) {
 }
 
 void drawChart() {
-  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
   const int X = 22, Y = 46, W = 288, H = 158;
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);     tft.drawString("in view", X, 26);
-  tft.setTextColor(TFT_ORANGE, TFT_BLACK);    tft.drawString("unlocated", X + 66, 26);
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK); tft.drawString("(24 h)", X + 150, 26);
-  tft.drawRect(X, Y, W, H, TFT_DARKGREY);
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_GREEN, TFT_BLACK);     spr.drawString("in view", X, 26);
+  spr.setTextColor(TFT_ORANGE, TFT_BLACK);    spr.drawString("unlocated", X + 66, 26);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString("(24 h)", X + 150, 26);
+  spr.drawRect(X, Y, W, H, TFT_DARKGREY);
   int mx = 12;
   for (int i = 0; i < histLen; i++) if (viewHist[i] > mx) mx = viewHist[i];
   char lbl[12]; snprintf(lbl, sizeof(lbl), "%d", mx);
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  tft.drawString(lbl, 2, Y - 3);
-  tft.drawString("0", 12, Y + H - 6);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  spr.drawString(lbl, 2, Y - 3);
+  spr.drawString("0", 12, Y + H - 6);
   int pvx = -1, pvy = 0, pux = -1, puy = 0;
   for (int i = 0; i < histLen; i++) {
     int x  = X + (histLen <= 1 ? 0 : (int)((long)(W - 2) * i / (histLen - 1)));
     int yv = Y + H - 1 - (int)((long)(H - 2) * viewHist[i] / mx);
     int yu = Y + H - 1 - (int)((long)(H - 2) * unlocHist[i] / mx);
-    if (pvx >= 0) tft.drawLine(pvx, pvy, x, yv, TFT_GREEN);
-    if (pux >= 0) tft.drawLine(pux, puy, x, yu, TFT_ORANGE);
+    if (pvx >= 0) spr.drawLine(pvx, pvy, x, yv, TFT_GREEN);
+    if (pux >= 0) spr.drawLine(pux, puy, x, yu, TFT_ORANGE);
     pvx = x; pvy = yv; pux = x; puy = yu;
   }
   // hour markers (UTC) across the 24 h window: 24h-ago, 16h, 8h, now
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
   if (gps.time.isValid()) {
     int hh = gps.time.hour();
     int hrs[4] = { hh, (hh + 8) % 24, (hh + 16) % 24, hh };  // left->right
     int xs[4]  = { X, X + W / 3, X + 2 * W / 3, X + W - 12 };
     for (int i = 0; i < 4; i++) {
       char t[4]; snprintf(t, sizeof(t), "%02d", hrs[i]);
-      tft.drawString(t, xs[i], Y + H + 3);
+      spr.drawString(t, xs[i], Y + H + 3);
     }
   } else {
-    tft.drawString("-24h", X, Y + H + 3);
-    tft.drawString("now", X + W - 18, Y + H + 3);
+    spr.drawString("-24h", X, Y + H + 3);
+    spr.drawString("now", X + W - 18, Y + H + 3);
   }
 }
 
@@ -317,9 +319,9 @@ void initSd() {
 }
 
 void drawSdBadge() {
-  tft.setTextSize(2);
-  tft.setTextColor(sdOk ? TFT_GREEN : TFT_RED, TFT_BLACK);
-  tft.drawString(sdOk ? "SD" : "SD!", 292, 2);
+  spr.setTextSize(2);
+  spr.setTextColor(sdOk ? TFT_GREEN : TFT_RED, TFT_BLACK);
+  spr.drawString(sdOk ? "SD" : "SD!", 292, 2);
 }
 
 void logRow() {
@@ -341,15 +343,17 @@ void logRow() {
 }
 
 void drawPage() {
+  spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
   if (page == 0) drawSky(); else if (page == 1) drawDetail(); else drawChart();
+  spr.pushSprite(0, 0);   // one atomic blit to the screen -> no flicker
 }
 
 void setScreen(bool on) {
   screenOn = on;
   digitalWrite(LCD_BACKLIGHT, on ? HIGH : LOW);
-  if (on) { tft.fillScreen(TFT_BLACK); drawPage(); }  // full redraw on wake
+  if (on) drawPage();  // full redraw (sprite blit) on wake
 }
 
 uint32_t lastPrint = 0;
@@ -369,6 +373,8 @@ void setup() {
   tft.begin();
   tft.setRotation(3);
   tft.fillScreen(TFT_BLACK);
+  spr.setColorDepth(8);
+  spr.createSprite(320, 240);   // ~77 KB off-screen buffer for flicker-free blits
   initSd();
 }
 
