@@ -8,9 +8,18 @@
 
 #include <TinyGPSPlus.h>
 #include <TFT_eSPI.h>
+#include <Seeed_FS.h>
+#include "SD/Seeed_SD.h"
+#include <Wire.h>
+#include <SparkFunBQ27441.h>   // fuel gauge on the 650 mAh battery chassis
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
+
+bool batOk = false;            // BQ27441 present (battery chassis)
+bool screenOn = true;
+bool prev5s = HIGH;
+void setScreen(bool on);       // defined after the draw functions
 
 enum Constel { C_GPS, C_GLO, C_GAL, C_BDS, C_QZS, C_OTHER };
 struct Sat { uint8_t constel; uint8_t prn; int8_t elev; int16_t azim; uint8_t snr; uint32_t seen; };
@@ -137,10 +146,17 @@ void drawHeader() {
   tft.setTextSize(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   char h[40];
-  snprintf(h, sizeof(h), "View %2d  Use %2d  %s",
+  snprintf(h, sizeof(h), "V %2d  U %2d  %s",
            countInView(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0, fixStr());
   tft.drawString(h, 4, 2);
+  if (batOk) {
+    int soc = lipo.soc();
+    uint16_t bc = soc > 50 ? TFT_GREEN : (soc > 20 ? TFT_YELLOW : TFT_RED);
+    char b[8]; snprintf(b, sizeof(b), "%3d%%", soc);
+    tft.setTextColor(bc, TFT_BLACK);
+    tft.drawString(b, 232, 2);
+  }
 }
 
 void drawLegend() {
@@ -186,25 +202,197 @@ void drawSky() {
   }
 }
 
+// ---------- detail page ----------
+
+int  page = 0;              // 0 = sky, 1 = detail, 2 = chart
+bool prevKeyC = HIGH;
+
+// satellite history for the chart: in-view + unlocated, over 24 h
+const int      HIST_N = 288;             // 288 samples across the 288 px chart
+const uint32_t HIST_PERIOD_MS = 300000;  // one sample / 5 min -> 288 = 24 h
+uint8_t  viewHist[HIST_N];
+uint8_t  unlocHist[HIST_N];
+int      histLen = 0;
+uint32_t lastHistMs = 0;
+
+// SD logging
+bool sdOk = false;
+const char*    LOG_PATH = "/gps.csv";
+const uint32_t LOG_PERIOD_MS = 60000;
+uint32_t lastLogMs = 0;
+
+int strongestSnr() { int m=0; for (int i=0;i<satCount;i++) if (sats[i].snr>m) m=sats[i].snr; return m; }
+
+void drawDetail() {
+  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
+  tft.setTextSize(2);
+  char l[48]; int y = 30;
+  auto row = [&](const char* s){ tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK); tft.drawString(s, 8, y); y += 24; };
+  snprintf(l, sizeof(l), "In view: %d  (pos %d)", countInView(), countPositioned()); row(l);
+  snprintf(l, sizeof(l), "GPS %d GLO %d", countConstel(C_GPS), countConstel(C_GLO)); row(l);
+  snprintf(l, sizeof(l), "GAL %d BDS %d", countConstel(C_GAL), countConstel(C_BDS)); row(l);
+  snprintf(l, sizeof(l), "Used: %d  %s",
+           gps.satellites.isValid()?(int)gps.satellites.value():0, fixStr()); row(l);
+  snprintf(l, sizeof(l), "HDOP: %.1f  SNR %d", gps.hdop.isValid()?gps.hdop.hdop():0.0, strongestSnr()); row(l);
+  if (gps.location.isValid()) snprintf(l, sizeof(l), "%.4f %.4f", gps.location.lat(), gps.location.lng());
+  else snprintf(l, sizeof(l), "lat/lon: --");
+  row(l);
+  if (gps.altitude.isValid()) snprintf(l, sizeof(l), "Alt %.0f m", gps.altitude.meters());
+  else snprintf(l, sizeof(l), "Alt: --");
+  row(l);
+  if (gps.time.isValid()) snprintf(l, sizeof(l), "UTC %02d:%02d:%02d",
+                                   gps.time.hour(), gps.time.minute(), gps.time.second());
+  else snprintf(l, sizeof(l), "UTC --");
+  row(l);
+}
+
+void pollButtons() {
+  bool k = digitalRead(WIO_KEY_C);
+  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 3; if (screenOn) tft.fillScreen(TFT_BLACK); }
+  prevKeyC = k;
+
+  bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
+  if (prev5s == HIGH && s5 == LOW) setScreen(!screenOn);
+  prev5s = s5;
+}
+
+// ---------- chart: satellites in view over time ----------
+
+void pushHist(int v, int u) {
+  if (v > 255) v = 255; if (u > 255) u = 255;
+  if (histLen < HIST_N) { viewHist[histLen] = (uint8_t)v; unlocHist[histLen] = (uint8_t)u; histLen++; }
+  else {
+    for (int i = 1; i < HIST_N; i++) { viewHist[i-1] = viewHist[i]; unlocHist[i-1] = unlocHist[i]; }
+    viewHist[HIST_N-1] = (uint8_t)v; unlocHist[HIST_N-1] = (uint8_t)u;
+  }
+}
+
+void drawChart() {
+  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
+  const int X = 22, Y = 46, W = 288, H = 158;
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);     tft.drawString("in view", X, 26);
+  tft.setTextColor(TFT_ORANGE, TFT_BLACK);    tft.drawString("unlocated", X + 66, 26);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK); tft.drawString("(24 h)", X + 150, 26);
+  tft.drawRect(X, Y, W, H, TFT_DARKGREY);
+  int mx = 12;
+  for (int i = 0; i < histLen; i++) if (viewHist[i] > mx) mx = viewHist[i];
+  char lbl[12]; snprintf(lbl, sizeof(lbl), "%d", mx);
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  tft.drawString(lbl, 2, Y - 3);
+  tft.drawString("0", 12, Y + H - 6);
+  int pvx = -1, pvy = 0, pux = -1, puy = 0;
+  for (int i = 0; i < histLen; i++) {
+    int x  = X + (histLen <= 1 ? 0 : (int)((long)(W - 2) * i / (histLen - 1)));
+    int yv = Y + H - 1 - (int)((long)(H - 2) * viewHist[i] / mx);
+    int yu = Y + H - 1 - (int)((long)(H - 2) * unlocHist[i] / mx);
+    if (pvx >= 0) tft.drawLine(pvx, pvy, x, yv, TFT_GREEN);
+    if (pux >= 0) tft.drawLine(pux, puy, x, yu, TFT_ORANGE);
+    pvx = x; pvy = yv; pux = x; puy = yu;
+  }
+  // hour markers (UTC) across the 24 h window: 24h-ago, 16h, 8h, now
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  if (gps.time.isValid()) {
+    int hh = gps.time.hour();
+    int hrs[4] = { hh, (hh + 8) % 24, (hh + 16) % 24, hh };  // left->right
+    int xs[4]  = { X, X + W / 3, X + 2 * W / 3, X + W - 12 };
+    for (int i = 0; i < 4; i++) {
+      char t[4]; snprintf(t, sizeof(t), "%02d", hrs[i]);
+      tft.drawString(t, xs[i], Y + H + 3);
+    }
+  } else {
+    tft.drawString("-24h", X, Y + H + 3);
+    tft.drawString("now", X + W - 18, Y + H + 3);
+  }
+}
+
+// ---------- SD logging ----------
+
+void initSd() {
+  sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
+  if (sdOk && !SD.exists(LOG_PATH)) {
+    File f = SD.open(LOG_PATH, FILE_APPEND);
+    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou"); f.close(); }
+  }
+}
+
+void drawSdBadge() {
+  tft.setTextSize(2);
+  tft.setTextColor(sdOk ? TFT_GREEN : TFT_RED, TFT_BLACK);
+  tft.drawString(sdOk ? "SD" : "SD!", 292, 2);
+}
+
+void logRow() {
+  if (!sdOk) { initSd(); if (!sdOk) return; }
+  File f = SD.open(LOG_PATH, FILE_APPEND);
+  if (!f) { sdOk = false; return; }
+  char utc[24] = "";
+  if (gps.date.isValid() && gps.time.isValid())
+    snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             gps.date.year(), gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d\n",
+           utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
+           gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
+           gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
+           gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
+           countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS));
+  f.close();
+}
+
+void drawPage() {
+  drawHeader();
+  drawSdBadge();
+  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else drawChart();
+}
+
+void setScreen(bool on) {
+  screenOn = on;
+  digitalWrite(LCD_BACKLIGHT, on ? HIGH : LOW);
+  if (on) { tft.fillScreen(TFT_BLACK); drawPage(); }  // full redraw on wake
+}
+
 uint32_t lastPrint = 0;
 
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600);
+  pinMode(WIO_KEY_C, INPUT_PULLUP);
+  pinMode(WIO_5S_PRESS, INPUT_PULLUP);
+  pinMode(LCD_BACKLIGHT, OUTPUT);
+  digitalWrite(LCD_BACKLIGHT, HIGH);
+
+  Wire.begin();                 // fuel gauge is optional (battery chassis only)
+  batOk = lipo.begin();
+  if (batOk) lipo.setCapacity(650);
+
   tft.begin();
   tft.setRotation(3);
   tft.fillScreen(TFT_BLACK);
+  initSd();
 }
 
 void loop() {
   feedGps();
+  pollButtons();  // poll every loop so presses feel instant
+
+  if (millis() - lastHistMs >= HIST_PERIOD_MS) {
+    lastHistMs = millis();
+    expireSats();
+    pushHist(countInView(), countInView() - countPositioned());
+  }
+
   if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
     expireSats();
-    drawHeader();
-    drawSky();
+    if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
     Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d\n",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
       countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS));
+  }
+
+  if (millis() - lastLogMs >= LOG_PERIOD_MS) {
+    lastLogMs = millis();
+    logRow();
   }
 }
