@@ -3,8 +3,9 @@
 A Wio Terminal that visualizes what's *above* it. **Milestone 1 — GPS sky view:**
 a live polar "radar" of every satellite the Air530 GNSS module can hear
 (GPS + GLONASS + Galileo + BeiDou), colored by constellation, plus a numeric
-detail page, a 24-hour satellite-count chart, and microSD logging with a real
-UTC clock from the satellites.
+detail page, a 24-hour satellite-count chart, reception-anomaly alerts, the
+live position of **Mars** on the sky, and microSD logging with a real UTC clock
+from the satellites.
 
 Planned later milestones add a **dust/particulate sensor** and an
 **ambient-light sensor** — the firmware and CSV are structured so those slot in
@@ -67,12 +68,26 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   constellation** (GPS green, GLONASS cyan, Galileo orange, BeiDou magenta),
   sized by signal strength. Satellites that are heard but not yet positioned
   (before a fix, or without ephemeris) show as an "N unlocated" count.
+  **Mars** is plotted as a red circled dot labelled "Mars" at its true
+  altitude/azimuth when above the horizon (a low-precision ephemeris computed
+  from the GPS position + UTC; "Mars below horizon" otherwise). Note the plot
+  assumes the device is pointed north — there's no on-board compass.
 - **Detail page** — numeric: in view (and positioned), per-constellation
   counts, satellites used, fix type, HDOP, strongest SNR, lat/lon, altitude,
   UTC time.
 - **Chart page** — satellites over the last **24 h**: green = in view, orange =
-  unlocated, with UTC **hour markers** (00–23) along the bottom. Samples once
-  every 5 minutes.
+  unlocated, with UTC **hour markers** (00–23) along the bottom and value
+  gridlines (0 / mid / max) on the left. Shows the current value (`now N`) and
+  a white **peak marker** labelled with the peak value and the UTC time it
+  occurred (`peak N @HH:MM`). Samples once every 5 minutes.
+
+### Reception anomaly detection
+
+Once a fix has been established, a red banner flags reception-health problems:
+`FIX LOST`, `HI HDOP` (poor geometry), `LOW SAT` (few satellites used), or
+`LOW SNR` (all signals weak) — the signatures of obstruction, interference, or
+jamming. It's heuristic reception monitoring, not certified anti-spoofing. The
+active state is also written to the `anom` column of every log row.
 
 **In view vs used vs unlocated:** *in view* = satellites the receiver hears
 (GSV). *used* = the subset locked into the position fix (GGA). *unlocated* =
@@ -83,8 +98,11 @@ in-view satellites whose sky position isn't known yet.
 Logs one row per minute to `/gps.csv` on the microSD:
 
 ```
-utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou
+utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom
 ```
+
+`anom` is the reception-anomaly state at that minute (`OK` or a code like
+`LOW SAT`).
 
 `utc` is a real ISO timestamp from the GPS clock (blank until the first fix —
 the satellites are the clock, so no RTC/battery is needed); `uptime_s` is
