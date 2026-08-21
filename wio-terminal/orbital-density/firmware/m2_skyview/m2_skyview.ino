@@ -7,8 +7,10 @@
 // FQBN: Seeeduino:samd:seeed_wio_terminal
 
 #include <TinyGPSPlus.h>
+#include <TFT_eSPI.h>
 
 TinyGPSPlus gps;
+TFT_eSPI tft;
 
 enum Constel { C_GPS, C_GLO, C_GAL, C_BDS, C_QZS, C_OTHER };
 struct Sat { uint8_t constel; uint8_t prn; int8_t elev; int16_t azim; uint8_t snr; uint32_t seen; };
@@ -113,20 +115,96 @@ const char* fixStr() {
   return gps.altitude.isValid() ? "3D FIX" : "2D FIX";
 }
 
+// ---------- display: polar sky plot ----------
+
+const int CX = 160, CY = 128, R = 100;
+
+uint16_t constelColor(uint8_t c) {
+  switch (c) {
+    case C_GPS: return TFT_GREEN;
+    case C_GLO: return TFT_CYAN;
+    case C_GAL: return TFT_ORANGE;
+    case C_BDS: return TFT_MAGENTA;
+    case C_QZS: return TFT_YELLOW;
+    default:    return TFT_LIGHTGREY;
+  }
+}
+
+int countPositioned() { int n=0; for (int i=0;i<satCount;i++) if (sats[i].elev>=0) n++; return n; }
+
+void drawHeader() {
+  tft.fillRect(0, 0, 320, 20, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  char h[40];
+  snprintf(h, sizeof(h), "View %2d  Use %2d  %s",
+           countInView(),
+           gps.satellites.isValid() ? (int)gps.satellites.value() : 0, fixStr());
+  tft.drawString(h, 4, 2);
+}
+
+void drawLegend() {
+  const char* names[] = {"GPS","GLO","GAL","BDS"};
+  uint8_t cs[] = {C_GPS,C_GLO,C_GAL,C_BDS};
+  tft.setTextSize(1);
+  int y = 26;
+  for (int i = 0; i < 4; i++) {
+    tft.fillRect(288, y, 8, 8, constelColor(cs[i]));
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString(names[i], 300, y);
+    y += 12;
+  }
+}
+
+void drawSky() {
+  tft.fillRect(0, 20, 320, 220, TFT_BLACK);
+  tft.drawCircle(CX, CY, R, TFT_DARKGREY);
+  tft.drawCircle(CX, CY, R * 2 / 3, TFT_DARKGREY);
+  tft.drawCircle(CX, CY, R / 3, TFT_DARKGREY);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  tft.drawString("N", CX - 2, CY - R - 10);
+  tft.drawString("S", CX - 2, CY + R + 2);
+  tft.drawString("E", CX + R + 2, CY - 3);
+  tft.drawString("W", CX - R - 10, CY - 3);
+  drawLegend();
+  for (int i = 0; i < satCount; i++) {
+    if (sats[i].elev < 0) continue;   // position not yet known: skip on the map
+    float r = R * (90 - sats[i].elev) / 90.0f;
+    float a = sats[i].azim * 0.017453292f;   // deg->rad
+    int x = CX + (int)(r * sinf(a));
+    int y = CY - (int)(r * cosf(a));
+    int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
+    tft.fillCircle(x, y, rad, constelColor(sats[i].constel));
+  }
+  // how many are heard but not yet placed (no fix / no ephemeris)
+  int unp = countInView() - countPositioned();
+  if (unp > 0) {
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    char u[24]; snprintf(u, sizeof(u), "%d unlocated", unp);
+    tft.drawString(u, 4, 228);
+  }
+}
+
 uint32_t lastPrint = 0;
 
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600);
+  tft.begin();
+  tft.setRotation(3);
+  tft.fillScreen(TFT_BLACK);
 }
 
 void loop() {
   feedGps();
-  if (millis() - lastPrint >= 2000) {
+  if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
     expireSats();
-    Serial.printf("inView=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d\n",
-      countInView(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
+    drawHeader();
+    drawSky();
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d\n",
+      countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
       countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS));
   }
 }
