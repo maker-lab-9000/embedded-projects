@@ -9,7 +9,8 @@
 //    /soil.csv (restore-on-boot ignores everything before the last marker),
 //    and chirps to confirm. Calibration anchors are untouched.
 //
-// CSV format: boot,minute,sensor,raw,pct  (+ "#RESET,<minute>" marker rows).
+// CSV format: boot,minute,sensor,raw,pct,temp,rh  (temp,rh only when an SHT40
+// is present; 5-col rows otherwise. + "#RESET,<minute>" marker rows).
 // `minute` does not advance while powered off (no battery-backed clock).
 
 #include <TFT_eSPI.h>
@@ -17,6 +18,7 @@
 #include "SD/Seeed_SD.h"
 #include <Wire.h>
 #include <SparkFunBQ27441.h>  // fuel gauge on the 650 mAh battery chassis
+#include "Adafruit_SHT4x.h"   // SHT40 temp/humidity on the Grove I2C port
 
 // ---- calibration (sensor #1, see CALIBRATION.md) ----
 const uint16_t RAW_AIR   = 3687;  // 0 %
@@ -44,8 +46,14 @@ long  segmentStart = 0;
 
 bool  sdOk = false;
 bool  batOk = false;  // BQ27441 fuel gauge present (650 mAh battery chassis)
+bool  shtOk = false;  // SHT40 temp/humidity present
+String i2cFound;       // TEMP diagnostic: I2C addresses seen at boot
 int   bootId = 1;
 long  minuteIdx = 0;
+
+Adafruit_SHT4x sht;
+float lastTemp = NAN, lastRh = NAN, lastVpd = NAN;  // latest SHT40 read + derived VPD
+float vpdBaseline = NAN;  // slow EMA of VPD; the drying tag compares against it
 
 float    accumPct = 0;
 int      accumN = 0;
@@ -86,6 +94,35 @@ uint16_t readSensorRaw() {
 float rawToPercent(uint16_t raw) {
   float pct = 100.0f * (float)(RAW_AIR - raw) / (float)(RAW_AIR - RAW_WATER);
   return constrain(pct, 0.0f, 100.0f);
+}
+
+// ---------- SHT40 temp/humidity ----------
+
+// Vapor pressure deficit (kPa): saturation VP (Tetens) x (1 - RH). Higher VPD
+// = "thirstier" air = faster evaporation, so it's the physical driver behind
+// the drying-rate context tag.
+float computeVpd(float tC, float rh) {
+  float svp = 0.6108f * expf(17.27f * tC / (tC + 237.3f));
+  return svp * (1.0f - rh / 100.0f);
+}
+
+// Reads the SHT40 and refreshes lastTemp/lastRh/lastVpd. No-op if absent.
+void readSht() {
+  if (!shtOk) return;
+  sensors_event_t h, t;
+  if (!sht.getEvent(&h, &t)) return;
+  lastTemp = t.temperature;
+  lastRh   = h.relative_humidity;
+  lastVpd  = computeVpd(lastTemp, lastRh);
+}
+
+// Qualitative drying tag: current VPD vs the slow baseline. col is set to the
+// display colour. Empty string until a baseline and a reading exist.
+const char* dryingTag(uint16_t &col) {
+  if (!shtOk || isnan(lastVpd) || isnan(vpdBaseline)) { col = TFT_DARKGREY; return ""; }
+  if (lastVpd > vpdBaseline * 1.25f) { col = TFT_RED;  return "dry:fast"; }
+  if (lastVpd < vpdBaseline * 0.80f) { col = TFT_BLUE; return "dry:slow"; }
+  col = TFT_DARKGREY; return "dry:norm";
 }
 
 // ---------- trend ----------
@@ -140,7 +177,7 @@ void restoreHistory() {
     if (sdOk) {
       File f = SD.open(LOG_PATH, FILE_APPEND);
       if (f) {
-        f.println("boot,minute,sensor,raw,pct");
+        f.println("boot,minute,sensor,raw,pct,temp,rh");
         f.close();
       }
     }
@@ -193,7 +230,16 @@ bool appendLog(uint16_t raw, float pct) {
   f.print(',');
   f.print(raw);
   f.print(',');
-  f.println(pct, 2);
+  f.print(pct, 2);
+  // With the SHT40 present, append temp,rh (7-col rows). Without it, stay 5-col
+  // — backward compatible either way (restore reads only the first 5 fields).
+  if (shtOk && !isnan(lastTemp) && !isnan(lastRh)) {
+    f.print(',');
+    f.print(lastTemp, 2);
+    f.print(',');
+    f.print(lastRh, 2);
+  }
+  f.println();
   f.close();
   return true;
 }
@@ -271,6 +317,24 @@ void drawTrend(float pct) {
   }
 }
 
+void drawEnv() {
+  if (!backlightOn) return;
+  tft.setTextSize(2);
+  if (shtOk && !isnan(lastTemp)) {
+    char line[24];
+    snprintf(line, sizeof(line), "%.1fC %2.0f%%RH ", lastTemp, lastRh);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.drawString(line, 20, 196);
+    uint16_t col;
+    const char* tag = dryingTag(col);
+    tft.setTextColor(col, TFT_BLACK);
+    tft.drawString(tag, 200, 196);
+  } else {
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.drawString("env: --            ", 20, 196);
+  }
+}
+
 void drawLive(float pct, uint16_t raw) {
   if (!backlightOn) return;
   uint16_t color = pct < WATER_THRESHOLD ? TFT_RED
@@ -319,6 +383,7 @@ void setBacklight(bool on) {
     drawSdBadge();
     drawSparkline();
     drawTrend(lastMean);
+    drawEnv();
   }
 }
 
@@ -379,6 +444,21 @@ void setup() {
   batOk = lipo.begin();
   if (batOk) lipo.setCapacity(650);
 
+  // TEMP diagnostic: scan the I2C bus into a global, echoed in the 5 s status.
+  i2cFound = "";
+  for (uint8_t a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) { i2cFound += " 0x"; i2cFound += String(a, HEX); }
+  }
+
+  // SHT40 temp/humidity is optional too (Grove I2C, address 0x44).
+  shtOk = sht.begin();
+  if (shtOk) {
+    sht.setPrecision(SHT4X_HIGH_PRECISION);
+    sht.setHeater(SHT4X_NO_HEATER);
+    readSht();
+  }
+
   tft.begin();
   tft.setRotation(3);
   tft.fillScreen(TFT_BLACK);
@@ -392,6 +472,7 @@ void setup() {
     lastMean = histAt(totalSamples - 1);
     drawTrend(lastMean);
   }
+  drawEnv();
 
   lastLogMs = millis();
 }
@@ -406,6 +487,8 @@ void loop() {
     accumPct += pct;
     accumN++;
     drawLive(pct, raw);
+    readSht();     // cheap (~10 ms); keeps the env line and tag responsive
+    drawEnv();
 
     if (millis() - lastStatusMs >= 5000) {
       lastStatusMs = millis();
@@ -416,7 +499,9 @@ void loop() {
       Serial.print("  sd=");
       Serial.print(sdOk ? "ok" : "none");
       Serial.print("  bl=");
-      Serial.println(backlightOn ? "on" : "off");
+      Serial.print(backlightOn ? "on" : "off");
+      Serial.print("  shtOk="); Serial.print(shtOk);
+      Serial.print("  i2c="); Serial.println(i2cFound);
     }
 
     if (millis() - lastLogMs >= LOG_PERIOD_MS && accumN > 0) {
@@ -428,6 +513,11 @@ void loop() {
 
       commitToHistory(mean);
 
+      // Slow VPD baseline (EMA over logged minutes) for the drying tag.
+      if (shtOk && !isnan(lastVpd)) {
+        vpdBaseline = isnan(vpdBaseline) ? lastVpd : 0.02f * lastVpd + 0.98f * vpdBaseline;
+      }
+
       if (!sdOk) initSd();
       if (sdOk && !appendLog(raw, mean)) {
         sdOk = false;
@@ -437,6 +527,7 @@ void loop() {
 
       drawSparkline();
       drawTrend(mean);
+      drawEnv();
 
       float rate = 0;
       bool haveRate = slopePerHour(rate);
@@ -447,7 +538,13 @@ void loop() {
       Serial.print(",");
       Serial.print(mean, 2);
       Serial.print(",");
-      if (haveRate) Serial.println(rate, 3); else Serial.println("na");
+      if (haveRate) Serial.print(rate, 3); else Serial.print("na");
+      if (shtOk && !isnan(lastTemp)) {
+        Serial.print(",t="); Serial.print(lastTemp, 2);
+        Serial.print(",rh="); Serial.print(lastRh, 2);
+        Serial.print(",vpd="); Serial.print(lastVpd, 3);
+      }
+      Serial.println();
 
       if (mean <= WATER_THRESHOLD && !lowAlerted) {
         lowAlerted = true;
