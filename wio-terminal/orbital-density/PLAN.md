@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task-by-task; each task ends with a compile gate and (where noted) a hardware checkpoint. Steps use checkbox (`- [ ]`) syntax.
 
-**Project vision:** "Orbital Density" — a Wio Terminal that visualizes what's *above* it. This plan implements the first milestone: **GPS sky view** (satellite density in the sky via the Air530). Planned later milestones add a **dust/particulate sensor** and an **ambient-light sensor** to build a fuller picture of the overhead environment; the firmware and CSV are structured so those slot in as additional sensors + pages/columns rather than a rewrite.
+**Project vision:** "Orbital Density" — a Wio Terminal that visualizes what's *above* it. This plan implements the first milestone: **GPS sky view** (satellite density in the sky via the Air530). Planned later milestones add an external **magnetometer/compass** (to orient the sky plot to true North — the Wio has no built-in compass, only an accelerometer), a **dust/particulate sensor**, and an **ambient-light sensor** to build a fuller picture of the overhead environment; the firmware and CSV are structured so those slot in as additional sensors + pages/columns rather than a rewrite.
 
 **Goal (this milestone):** Read the Air530 GNSS module on the Wio Terminal and show a live "sky radar" — a polar plot of every satellite in view (all constellations, color-coded), plus a numeric detail page and once-a-minute logging of satellite counts to microSD.
 

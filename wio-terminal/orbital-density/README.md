@@ -92,8 +92,14 @@ always present as a fallback.
 
 ## To do
 
-- Dust / particulate sensor + ambient-light sensor (the broader "orbital
-  density" vision) as additional sensors, pages, and CSV columns.
+Future sensors (the broader "orbital density" vision), each an added
+sensor + page/columns:
+
+- **Magnetometer / compass** — external, on the I2C Grove port (the Wio has no
+  built-in one; its IMU is an accelerometer only). Auto-orient the sky plot to
+  true North instead of assuming the device is pointed north.
+- **Dust / particulate sensor.**
+- **Ambient-light sensor.**
 
 ## Repo layout
 
