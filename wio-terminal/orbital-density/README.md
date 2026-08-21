@@ -7,6 +7,8 @@ detail page, a 24-hour satellite-count chart, reception-anomaly alerts, the
 live position of **Mars** on the sky, and microSD logging with a real UTC clock
 from the satellites.
 
+<img src="docs/skyview.jpg" width="480" alt="Wio Terminal showing the sky-view radar: header V 11 U 6 3D FIX with battery and SD badge, a polar plot with elevation rings and N/E/S/W, satellites colored by constellation, a legend, and a 'Mars below horizon' note">
+
 Planned later milestones add a **dust/particulate sensor** and an
 **ambient-light sensor** — the firmware and CSV are structured so those slot in
 as extra sensors, pages, and columns.
