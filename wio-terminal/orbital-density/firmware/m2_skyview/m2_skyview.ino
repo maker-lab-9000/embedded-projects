@@ -22,6 +22,14 @@ bool screenOn = true;
 bool prev5s = HIGH;
 void setScreen(bool on);       // defined after the draw functions
 void drawPage();
+int  strongestSnr();           // defined later
+
+// anomaly (reception-health) detection
+char anomCode[12] = "OK";
+bool everFixed = false;
+const float HDOP_ANOM   = 8.0f;
+const int   LOWSAT_ANOM = 4;
+const int   LOWSNR_ANOM = 12;
 
 enum Constel { C_GPS, C_GLO, C_GAL, C_BDS, C_QZS, C_OTHER };
 struct Sat { uint8_t constel; uint8_t prn; int8_t elev; int16_t azim; uint8_t snr; uint32_t seen; };
@@ -143,6 +151,79 @@ uint16_t constelColor(uint8_t c) {
 
 int countPositioned() { int n=0; for (int i=0;i<satCount;i++) if (sats[i].elev>=0) n++; return n; }
 
+// ---------- Mars position (Schlyter low-precision ephemeris) ----------
+
+static double revd(double x) { x = fmod(x, 360.0); if (x < 0) x += 360.0; return x; }
+
+// Mars altitude/azimuth in degrees for the current GPS location + UTC.
+// Returns false until position and time are valid. az: 0=N, 90=E, 180=S, 270=W.
+bool marsAltAz(double &altDeg, double &azDeg) {
+  if (!gps.location.isValid() || !gps.date.isValid() || !gps.time.isValid()) return false;
+  const double R2 = M_PI / 180.0;
+  double Y = gps.date.year(), M = gps.date.month(), D = gps.date.day();
+  double UT = gps.time.hour() + gps.time.minute() / 60.0 + gps.time.second() / 3600.0;
+  long dn = 367L*(long)Y - 7L*((long)Y + ((long)M + 9)/12)/4 + 275L*(long)M/9 + (long)D - 730530L;
+  double d = (double)dn + UT / 24.0;
+  double ecl = 23.4393 - 3.563e-7 * d;
+
+  // Sun (Earth's position + sidereal-time reference)
+  double ws = 282.9404 + 4.70935e-5 * d, es = 0.016709 - 1.151e-9 * d;
+  double Ms = revd(356.0470 + 0.9856002585 * d);
+  double Es = Ms + (1/R2)*es*sin(Ms*R2)*(1 + es*cos(Ms*R2));
+  double xvs = cos(Es*R2) - es, yvs = sqrt(1 - es*es)*sin(Es*R2);
+  double vs = atan2(yvs, xvs)/R2, rs = sqrt(xvs*xvs + yvs*yvs);
+  double lons = revd(vs + ws);
+  double xs = rs*cos(lons*R2), ys = rs*sin(lons*R2);
+  double Ls = revd(ws + Ms);
+
+  // Mars orbital elements
+  double N = 49.5574 + 2.11081e-5*d, inc = 1.8497 - 1.78e-8*d, w = 286.5016 + 2.92961e-5*d;
+  double a = 1.523688, e = 0.093405 + 2.516e-9*d;
+  double Mm = revd(18.6021 + 0.5240207766*d);
+  double E = Mm + (1/R2)*e*sin(Mm*R2)*(1 + e*cos(Mm*R2));
+  for (int it = 0; it < 4; it++) E = E - (E - (1/R2)*e*sin(E*R2) - Mm) / (1 - e*cos(E*R2));
+  double xv = a*(cos(E*R2) - e), yv = a*sqrt(1 - e*e)*sin(E*R2);
+  double v = atan2(yv, xv)/R2, r = sqrt(xv*xv + yv*yv);
+  double xh = r*(cos(N*R2)*cos((v+w)*R2) - sin(N*R2)*sin((v+w)*R2)*cos(inc*R2));
+  double yh = r*(sin(N*R2)*cos((v+w)*R2) + cos(N*R2)*sin((v+w)*R2)*cos(inc*R2));
+  double zh = r*(sin((v+w)*R2)*sin(inc*R2));
+  double xg = xh + xs, yg = yh + ys, zg = zh;
+  double xe = xg, ye = yg*cos(ecl*R2) - zg*sin(ecl*R2), ze = yg*sin(ecl*R2) + zg*cos(ecl*R2);
+  double RA = revd(atan2(ye, xe)/R2);
+  double Dec = atan2(ze, sqrt(xe*xe + ye*ye))/R2;
+
+  // topocentric alt/az
+  double lat = gps.location.lat(), lon = gps.location.lng();
+  double GMST0 = revd(Ls + 180.0);
+  double LST = revd(GMST0 + UT*15.0 + lon);
+  double HA = revd(LST - RA);
+  double haR = HA*R2, decR = Dec*R2, latR = lat*R2;
+  double sinAlt = sin(latR)*sin(decR) + cos(latR)*cos(decR)*cos(haR);
+  double alt = asin(sinAlt)/R2;
+  double cosAz = (sin(decR) - sin(latR)*sinAlt) / (cos(latR)*cos(alt*R2));
+  cosAz = cosAz > 1 ? 1 : (cosAz < -1 ? -1 : cosAz);
+  double az = acos(cosAz)/R2;
+  if (sin(haR) > 0) az = 360.0 - az;
+  altDeg = alt; azDeg = az;
+  return true;
+}
+
+// ---------- anomaly (reception health) ----------
+
+void evalAnomaly() {
+  if (gps.location.isValid()) everFixed = true;
+  if (!everFixed) { strcpy(anomCode, "OK"); return; }   // no working baseline yet
+  const char* code = "OK";
+  if (!gps.location.isValid())                                                     code = "FIX LOST";
+  else if (gps.hdop.isValid() && gps.hdop.hdop() > HDOP_ANOM)                       code = "HI HDOP";
+  else if ((gps.satellites.isValid() ? (int)gps.satellites.value() : 0) < LOWSAT_ANOM) code = "LOW SAT";
+  else if (strongestSnr() < LOWSNR_ANOM)                                            code = "LOW SNR";
+  strncpy(anomCode, code, sizeof(anomCode) - 1);
+  anomCode[sizeof(anomCode) - 1] = 0;
+}
+
+bool anomalyActive() { return strcmp(anomCode, "OK") != 0; }
+
 void drawHeader() {
   spr.fillRect(0, 0, 320, 20, TFT_BLACK);
   spr.setTextSize(2);
@@ -194,6 +275,23 @@ void drawSky() {
     int y = CY - (int)(r * cosf(a));
     int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
     spr.fillCircle(x, y, rad, constelColor(sats[i].constel));
+  }
+  // Mars: plot at its real alt/az when above the horizon.
+  double mAlt, mAz;
+  if (marsAltAz(mAlt, mAz)) {
+    if (mAlt > 0) {
+      float rr = R * (90 - mAlt) / 90.0f;
+      float aa = mAz * 0.017453292f;
+      int mxp = CX + (int)(rr * sinf(aa));
+      int myp = CY - (int)(rr * cosf(aa));
+      spr.fillCircle(mxp, myp, 3, TFT_RED);
+      spr.drawCircle(mxp, myp, 6, TFT_RED);
+      spr.setTextColor(TFT_RED, TFT_BLACK);
+      spr.drawString("Mars", mxp + 9, myp - 3);
+    } else {
+      spr.setTextColor(TFT_RED, TFT_BLACK);
+      spr.drawString("Mars below horizon", 190, 228);
+    }
   }
   // how many are heard but not yet placed (no fix / no ephemeris)
   int unp = countInView() - countPositioned();
@@ -283,6 +381,14 @@ void drawChart() {
   spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   spr.drawString(lbl, 2, Y - 3);
   spr.drawString("0", 12, Y + H - 6);
+  // mid-level gridline + value label, so any point's magnitude is readable
+  int midv = mx / 2;
+  int ymid = Y + H - 1 - (int)((long)(H - 2) * midv / mx);
+  for (int gx = X + 2; gx < X + W - 2; gx += 8) spr.drawPixel(gx, ymid, TFT_DARKGREY);
+  snprintf(lbl, sizeof(lbl), "%d", midv);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  spr.drawString(lbl, 2, ymid - 3);
+  // the two series
   int pvx = -1, pvy = 0, pux = -1, puy = 0;
   for (int i = 0; i < histLen; i++) {
     int x  = X + (histLen <= 1 ? 0 : (int)((long)(W - 2) * i / (histLen - 1)));
@@ -291,6 +397,28 @@ void drawChart() {
     if (pvx >= 0) spr.drawLine(pvx, pvy, x, yv, TFT_GREEN);
     if (pux >= 0) spr.drawLine(pux, puy, x, yu, TFT_ORANGE);
     pvx = x; pvy = yv; pux = x; puy = yu;
+  }
+  // current value + peak marker with the time it occurred
+  if (histLen > 0) {
+    char info[28];
+    snprintf(info, sizeof(info), "now %d", viewHist[histLen - 1]);
+    spr.setTextColor(TFT_GREEN, TFT_BLACK);
+    spr.drawString(info, X + W - 46, 36);
+    int pk = 0;
+    for (int i = 1; i < histLen; i++) if (viewHist[i] > viewHist[pk]) pk = i;
+    int px = X + (histLen <= 1 ? 0 : (int)((long)(W - 2) * pk / (histLen - 1)));
+    int py = Y + H - 1 - (int)((long)(H - 2) * viewHist[pk] / mx);
+    spr.fillCircle(px, py, 2, TFT_WHITE);
+    spr.drawCircle(px, py, 4, TFT_WHITE);
+    if (gps.time.isValid()) {
+      int minsAgo = ((histLen - 1) - pk) * (int)(HIST_PERIOD_MS / 60000);
+      int pkMin = (((gps.time.hour() * 60 + gps.time.minute()) - minsAgo) % 1440 + 1440) % 1440;
+      snprintf(info, sizeof(info), "peak %d @%02d:%02d", viewHist[pk], pkMin / 60, pkMin % 60);
+    } else {
+      snprintf(info, sizeof(info), "peak %d", viewHist[pk]);
+    }
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    spr.drawString(info, X, 36);
   }
   // hour markers (UTC) across the 24 h window: 24h-ago, 16h, 8h, now
   spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
@@ -314,7 +442,7 @@ void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
     File f = SD.open(LOG_PATH, FILE_APPEND);
-    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou"); f.close(); }
+    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom"); f.close(); }
   }
 }
 
@@ -333,12 +461,13 @@ void logRow() {
     snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              gps.date.year(), gps.date.month(), gps.date.day(),
              gps.time.hour(), gps.time.minute(), gps.time.second());
-  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d\n",
+  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s\n",
            utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
-           countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS));
+           countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
+           anomCode);
   f.close();
 }
 
@@ -347,6 +476,13 @@ void drawPage() {
   drawHeader();
   drawSdBadge();
   if (page == 0) drawSky(); else if (page == 1) drawDetail(); else drawChart();
+  if (anomalyActive()) {   // reception-health alert banner, over any page
+    spr.fillRect(0, 224, 320, 16, TFT_RED);
+    spr.setTextSize(2);
+    spr.setTextColor(TFT_WHITE, TFT_RED);
+    char m[24]; snprintf(m, sizeof(m), "! %s", anomCode);
+    spr.drawString(m, 6, 225);
+  }
   spr.pushSprite(0, 0);   // one atomic blit to the screen -> no flicker
 }
 
@@ -391,6 +527,7 @@ void loop() {
   if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
     expireSats();
+    evalAnomaly();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
     Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d\n",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
