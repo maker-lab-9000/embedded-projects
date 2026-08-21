@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - FQBN (verbatim): `Seeeduino:samd:seeed_wio_terminal`.
-- Air530 on the Wio's UART Grove port → `Serial1.begin(9600)`. Confirm the physical Grove port at bring-up (the module needs sky/window view; cold start 1–2 min).
+- Air530 → the Wio's **40-pin header** UART (`Serial1.begin(9600)`), NOT a Grove port: GPS TX → header pin 10 (BCM15/RXD), VCC → pin 1 (3V3), GND → pin 6. The D0/D1 Grove port has no usable hardware UART (SERCOM4 won't latch it even though the signal is present — verified at bring-up). Module needs sky/window view; cold start 1–2 min.
 - NMEA talker → constellation: `GP`=GPS, `GL`=GLONASS, `GA`=Galileo, `BD`/`GB`=BeiDou, `QZ`=QZSS. Validate the `*` checksum before trusting a sentence.
 - "In view" = live GSV table entries (satellites the receiver hears). "Used" = `gps.satellites.value()` from GGA (in the fix). Keep the two distinct everywhere.
 - Display 320×240 landscape (`tft.setRotation(3)`), reuse the visual language of the soil monitor (header, SD badge, dark background).
