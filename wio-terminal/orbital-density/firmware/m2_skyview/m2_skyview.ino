@@ -4,6 +4,13 @@
 // WIRING: Air530 on the 40-pin HEADER UART (not a Grove port): GPS TX -> pin 10
 // (BCM15/RXD), VCC -> pin 1 (3V3), GND -> pin 6.
 //
+// Grove Dust Sensor (Shinyei PPD42NS) on the D0/D1 Grove port, signal -> D0.
+// Grove VCC is 3.3V (sensor is rated 5V) -- readings are a relative "dust
+// activity" indicator, not a calibrated concentration. Pulse width is
+// measured by polling digitalRead()+micros() rather than pulseIn(): this
+// core's pulseIn() does not return 0 on a clean timeout (confirmed at
+// bring-up -- it returns a bogus near-ULONG_MAX value instead every time).
+//
 // FQBN: Seeeduino:samd:seeed_wio_terminal
 
 #include <TinyGPSPlus.h>
@@ -224,6 +231,54 @@ void evalAnomaly() {
 
 bool anomalyActive() { return strcmp(anomCode, "OK") != 0; }
 
+// ---------- dust sensor (Grove Dust Sensor / Shinyei PPD42NS) ----------
+
+const int      DUST_PIN       = D0;
+const uint32_t DUST_WINDOW_MS = 30000;   // Shinyei spec sample window
+
+bool     dustWasLow = false;
+uint32_t dustFallAtUs = 0;
+uint32_t dustLowTotalUs = 0;
+uint32_t dustPulses = 0;
+uint32_t dustWindowStart = 0;
+
+float dustRatio = 0;    // % low-time over the last completed window
+float dustConc  = 0;    // Shinyei curve estimate, pcs/0.01cf (relative, uncalibrated at 3.3V)
+
+const int DUST_HIST_N = 240;             // 240 samples * 30s = 2h
+uint8_t   dustHist[DUST_HIST_N];         // ratio*10, clamped to fit a byte (0-25.5%)
+int       dustHistLen = 0;
+
+void pushDustHist(float ratio) {
+  int v = (int)(ratio * 10.0f + 0.5f);
+  if (v > 255) v = 255;
+  if (dustHistLen < DUST_HIST_N) dustHist[dustHistLen++] = (uint8_t)v;
+  else {
+    for (int i = 1; i < DUST_HIST_N; i++) dustHist[i-1] = dustHist[i];
+    dustHist[DUST_HIST_N-1] = (uint8_t)v;
+  }
+}
+
+// Non-blocking pulse-width poll -- call every loop() iteration.
+void pollDust() {
+  bool nowLow = (digitalRead(DUST_PIN) == LOW);
+  uint32_t now = micros();
+  if (nowLow && !dustWasLow) {
+    dustFallAtUs = now;
+  } else if (!nowLow && dustWasLow) {
+    dustLowTotalUs += (now - dustFallAtUs);
+    dustPulses++;
+  }
+  dustWasLow = nowLow;
+
+  if (millis() - dustWindowStart >= DUST_WINDOW_MS) {
+    dustRatio = 100.0f * (dustLowTotalUs / 1000.0f) / DUST_WINDOW_MS;
+    dustConc = 1.1f*dustRatio*dustRatio*dustRatio - 3.8f*dustRatio*dustRatio + 520.0f*dustRatio + 0.62f;
+    pushDustHist(dustRatio);
+    dustLowTotalUs = 0; dustPulses = 0; dustWindowStart = millis();
+  }
+}
+
 void drawHeader() {
   spr.fillRect(0, 0, 320, 20, TFT_BLACK);
   spr.setTextSize(2);
@@ -348,7 +403,7 @@ void drawDetail() {
 
 void pollButtons() {
   bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 3; if (screenOn) drawPage(); }
+  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 4; if (screenOn) drawPage(); }
   prevKeyC = k;
 
   bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
@@ -438,11 +493,43 @@ void drawChart() {
 
 // ---------- SD logging ----------
 
+void drawDust() {
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.setTextSize(2);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  char l[40];
+  snprintf(l, sizeof(l), "Ratio: %.2f%%   %.0f pcs", dustRatio, dustConc);
+  spr.drawString(l, 8, 26);
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("relative activity - uncalibrated (3.3V)", 8, 52);
+
+  const int X = 22, Y = 82, W = 288, H = 120;
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  spr.drawString("dust activity (2 h)", X, 68);
+  spr.drawRect(X, Y, W, H, TFT_DARKGREY);
+  int mx = 10;   // in ratio*10 units, i.e. floor of 1.0%
+  for (int i = 0; i < dustHistLen; i++) if (dustHist[i] > mx) mx = dustHist[i];
+  char lbl[12]; snprintf(lbl, sizeof(lbl), "%.1f%%", mx / 10.0f);
+  spr.drawString(lbl, 2, Y - 3);
+  spr.drawString("0", 12, Y + H - 6);
+  int prevX = -1, prevY = 0;
+  for (int i = 0; i < dustHistLen; i++) {
+    int x = X + (dustHistLen <= 1 ? 0 : (int)((long)(W - 2) * i / (dustHistLen - 1)));
+    int y = Y + H - 1 - (int)((long)(H - 2) * dustHist[i] / mx);
+    if (prevX >= 0) spr.drawLine(prevX, prevY, x, y, TFT_YELLOW);
+    prevX = x; prevY = y;
+  }
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("-2h", X, Y + H + 3);
+  spr.drawString("now", X + W - 18, Y + H + 3);
+}
+
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
     File f = SD.open(LOG_PATH, FILE_APPEND);
-    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom"); f.close(); }
+    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc"); f.close(); }
   }
 }
 
@@ -461,13 +548,13 @@ void logRow() {
     snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              gps.date.year(), gps.date.month(), gps.date.day(),
              gps.time.hour(), gps.time.minute(), gps.time.second());
-  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s\n",
+  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%.2f,%.1f\n",
            utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
            countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
-           anomCode);
+           anomCode, dustRatio, dustConc);
   f.close();
 }
 
@@ -475,7 +562,7 @@ void drawPage() {
   spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
-  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else drawChart();
+  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else drawDust();
   if (anomalyActive()) {   // reception-health alert banner, over any page
     spr.fillRect(0, 224, 320, 16, TFT_RED);
     spr.setTextSize(2);
@@ -512,11 +599,17 @@ void setup() {
   spr.setColorDepth(8);
   spr.createSprite(320, 240);   // ~77 KB off-screen buffer for flicker-free blits
   initSd();
+
+  pinMode(DUST_PIN, INPUT);
+  dustWindowStart = millis();
+  dustWasLow = (digitalRead(DUST_PIN) == LOW);
+  dustFallAtUs = micros();
 }
 
 void loop() {
   feedGps();
   pollButtons();  // poll every loop so presses feel instant
+  pollDust();     // non-blocking; must run every loop iteration
 
   if (millis() - lastHistMs >= HIST_PERIOD_MS) {
     lastHistMs = millis();
