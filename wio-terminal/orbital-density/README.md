@@ -10,7 +10,13 @@ a relative "dust activity" page. **Second extra sensor:** a BME280
 (temperature, humidity, pressure) with a 24-hour chart and a
 **pressure-trend weather forecaster** (storm / rain / change / fair / stable).
 
-<img src="docs/skyview.jpg" width="480" alt="Wio Terminal showing the sky-view radar: header V 11 U 6 3D FIX with battery and SD badge, a polar plot with elevation rings and N/E/S/W, satellites colored by constellation, a legend, and a 'Mars below horizon' note">
+<img src="docs/page-sky.jpg" width="480" alt="Sky page: polar radar plot with GPS (green) and BeiDou (magenta) satellites, elevation rings, compass N/E/S/W, Mars indicator, battery 91%, SD badge">
+
+All five display pages:
+
+<img src="docs/page-sky.jpg" width="240" alt="Sky page"> <img src="docs/page-detail.jpg" width="240" alt="Detail page">
+<img src="docs/page-chart.jpg" width="240" alt="Chart page"> <img src="docs/page-dust.jpg" width="240" alt="Dust page">
+<img src="docs/page-env.jpg" width="240" alt="Env page">
 
 Planned later milestones add an **ambient-light sensor** and a
 **magnetometer/compass** — the firmware and CSV are structured so those slot in
