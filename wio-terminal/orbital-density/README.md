@@ -6,7 +6,9 @@ a live polar "radar" of every satellite the Air530 GNSS module can hear
 detail page, a 24-hour satellite-count chart, reception-anomaly alerts, the
 live position of **Mars** on the sky, and microSD logging with a real UTC clock
 from the satellites. **Plus a first extra sensor:** a Grove Dust Sensor feeding
-a relative "dust activity" page.
+a relative "dust activity" page. **Second extra sensor:** a BME280
+(temperature, humidity, pressure) with a 24-hour chart and a
+**pressure-trend weather forecaster** (storm / rain / change / fair / stable).
 
 <img src="docs/skyview.jpg" width="480" alt="Wio Terminal showing the sky-view radar: header V 11 U 6 3D FIX with battery and SD badge, a polar plot with elevation rings and N/E/S/W, satellites colored by constellation, a legend, and a 'Mars below horizon' note">
 
@@ -21,6 +23,7 @@ as extra sensors, pages, and columns.
 - Seeed Wio Terminal (SAMD51).
 - Air530 GNSS module (multi-constellation, NMEA 0183 over UART @ 9600).
 - Grove Dust Sensor (Shinyei PPD42NS), digital pulse output.
+- Seengreat BME280 Environmental Sensor (temperature, humidity, pressure via I2C).
 
 ### Wiring — use the 40-pin HEADER UART, not a Grove port
 
@@ -54,6 +57,16 @@ adding a resistor divider on the signal line** — no SAMD51 GPIO pin is
 5V-tolerant (confirmed against the datasheet), so a 5V-driven output would risk
 damaging whichever pin it's wired to.
 
+### BME280 wiring — I2C Grove port (left side)
+
+The Seengreat BME280 plugs into the **I2C Grove port** (left side, labelled
+SDA/SCL) via a Grove cable. VCC = 3.3V, GND, SCL, SDA — no jumper wiring
+needed.
+
+The sensor's ADDR jumper selects address **0x76 or 0x77**; the firmware
+auto-detects both. No conflict with the BQ27441 fuel gauge (0x55) — they
+share the Wire bus.
+
 ⚠️ **Don't use `pulseIn()` for this sensor on this core.** It does not return
 `0` on a clean timeout — confirmed at bring-up: it returned a bogus
 near-`ULONG_MAX` value on essentially every timeout, at a rate matching its own
@@ -67,7 +80,8 @@ entirely.
 |--------|---------|
 | `firmware/m1_gps`     | serial-only bring-up: NMEA read + TinyGPS++ summary |
 | `firmware/m1_dust`    | serial-only bring-up: dust sensor pulse polling |
-| `firmware/m2_skyview` | full UI: sky/detail/chart/dust pages, SD logging ← **current** |
+| `firmware/m1_bme280`  | serial-only bring-up: I2C scan + BME280 temp/humidity/pressure |
+| `firmware/m2_skyview` | full UI: sky/detail/chart/dust/env pages, SD logging ← **current** |
 
 Build and flash (close any serial monitor first — it locks the port):
 
@@ -83,10 +97,10 @@ start takes 1–2 minutes to a fix.
 
 ## Display & controls
 
-Four pages, cycled with the **top-left button (KEY_C)**: Sky → Detail → Chart →
-Dust → back to Sky. The **5-way switch center-press toggles the screen** on/off
-(GPS parsing, dust polling, and SD logging keep running while it's off — the
-backlight is the main power draw).
+Five pages, cycled with the **top-left button (KEY_C)**: Sky → Detail → Chart →
+Dust → Env → back to Sky. The **5-way switch center-press toggles the screen**
+on/off (GPS parsing, dust polling, BME280 reads, and SD logging keep running
+while it's off — the backlight is the main power draw).
 
 Header (all pages): `V <in-view>  U <used>  <fix>`, battery % (if the chassis
 fuel gauge is present), and a green `SD` / red `SD!` badge.
@@ -110,8 +124,16 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   occurred (`peak N @HH:MM`). Samples once every 5 minutes.
 - **Dust page** — `Ratio: X.XX%   N pcs` (LPO ratio and a Shinyei-curve
   concentration estimate, both labelled "relative activity - uncalibrated"),
-  plus a 2-hour rolling chart sampled once every 30 seconds (the sensor's own
-  spec window). Yellow line, `0`/max gridlines, `-2h`/`now` markers.
+  plus a 24-hour rolling chart sampled once every 5 minutes. Yellow line,
+  `0`/max gridlines, UTC hour markers along the bottom.
+- **Env page** — current temperature (°C), humidity (%RH), and pressure (hPa),
+  plus a **weather forecast** based on the 3-hour pressure trend: `STORM
+  LIKELY` (red, >3 hPa drop + high humidity), `RAIN POSSIBLE` (yellow),
+  `CHANGE` (orange, moderate drop), `FAIR` (green, rising pressure), or
+  `STABLE` (grey). Shows "forecast in ~3h" until enough data accumulates.
+  Below the values: a 24-hour triple-line chart — temperature (cyan, left
+  axis), humidity (green), pressure (yellow, right axis auto-scaled) — with
+  UTC hour markers. Sampled every 5 minutes.
 
 ### Reception anomaly detection
 
@@ -130,12 +152,15 @@ in-view satellites whose sky position isn't known yet.
 Logs one row per minute to `/gps.csv` on the microSD:
 
 ```
-utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc
+utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather
 ```
 
 `anom` is the reception-anomaly state at that minute (`OK` or a code like
 `LOW SAT`). `dust_ratio`/`dust_conc` are the dust sensor's latest 30-second-window
 values (see the Dust page above) — relative/uncalibrated, not µg/m³.
+`temp_c`/`humidity`/`pressure_hpa` are from the BME280; `weather` is the
+current forecast state (`STORM LIKELY`, `RAIN POSSIBLE`, `CHANGE`, `FAIR`,
+`STABLE`, or `WAIT` during the initial 3-hour warm-up).
 
 `utc` is a real ISO timestamp from the GPS clock (blank until the first fix —
 the satellites are the clock, so no RTC/battery is needed); `uptime_s` is
@@ -146,9 +171,10 @@ always present as a fallback.
 Future sensors (the broader "orbital density" vision), each an added
 sensor + page/columns:
 
-- **Magnetometer / compass** — external, on the I2C Grove port (the Wio has no
-  built-in one; its IMU is an accelerometer only). Auto-orient the sky plot to
-  true North instead of assuming the device is pointed north.
+- **Magnetometer / compass** — external, on the I2C Grove port alongside the
+  BME280 (the Wio has no built-in compass; its IMU is an accelerometer only).
+  Auto-orient the sky plot to true North instead of assuming the device is
+  pointed north.
 - **Ambient-light sensor.**
 - Dust sensor: if better accuracy is ever wanted, power from 5V with a
   resistor divider on the signal line (see the wiring warning above) — not
@@ -157,6 +183,6 @@ sensor + page/columns:
 ## Repo layout
 
 ```
-firmware/   Arduino sketches (m1 GPS bring-up, m2 sky view)
+firmware/   Arduino sketches (m1 bring-ups, m2 full sky view)
 PLAN.md     design & implementation plan
 ```
