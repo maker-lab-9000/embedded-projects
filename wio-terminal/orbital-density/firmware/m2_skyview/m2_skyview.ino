@@ -11,6 +11,9 @@
 // core's pulseIn() does not return 0 on a clean timeout (confirmed at
 // bring-up -- it returns a bogus near-ULONG_MAX value instead every time).
 //
+// BME280 (Seengreat) on the I2C Grove port (left side), address 0x77.
+// Temp, humidity, pressure — calibrated via on-chip compensation.
+//
 // FQBN: Seeeduino:samd:seeed_wio_terminal
 
 #include <TinyGPSPlus.h>
@@ -245,7 +248,7 @@ uint32_t dustWindowStart = 0;
 float dustRatio = 0;    // % low-time over the last completed window
 float dustConc  = 0;    // Shinyei curve estimate, pcs/0.01cf (relative, uncalibrated at 3.3V)
 
-const int DUST_HIST_N = 240;             // 240 samples * 30s = 2h
+const int DUST_HIST_N = 288;             // 288 samples * 5min = 24h
 uint8_t   dustHist[DUST_HIST_N];         // ratio*10, clamped to fit a byte (0-25.5%)
 int       dustHistLen = 0;
 
@@ -274,8 +277,179 @@ void pollDust() {
   if (millis() - dustWindowStart >= DUST_WINDOW_MS) {
     dustRatio = 100.0f * (dustLowTotalUs / 1000.0f) / DUST_WINDOW_MS;
     dustConc = 1.1f*dustRatio*dustRatio*dustRatio - 3.8f*dustRatio*dustRatio + 520.0f*dustRatio + 0.62f;
-    pushDustHist(dustRatio);
     dustLowTotalUs = 0; dustPulses = 0; dustWindowStart = millis();
+  }
+}
+
+// ---------- BME280 (I2C Grove port, address 0x77) ----------
+
+const uint8_t BME_ADDR      = 0x77;
+const uint8_t BME_REG_ID    = 0xD0;
+const uint8_t BME_REG_HUM   = 0xF2;
+const uint8_t BME_REG_MEAS  = 0xF4;
+const uint8_t BME_REG_CFG   = 0xF5;
+const uint8_t BME_REG_CAL0  = 0x88;
+const uint8_t BME_REG_CAL26 = 0xE1;
+const uint8_t BME_REG_DATA  = 0xF7;
+
+bool bmeOk = false;
+uint16_t bT1; int16_t bT2, bT3;
+uint16_t bP1; int16_t bP2,bP3,bP4,bP5,bP6,bP7,bP8,bP9;
+uint8_t  bH1; int16_t bH2; uint8_t bH3; int16_t bH4,bH5; int8_t bH6;
+int32_t  bme_t_fine;
+
+float bmeTemp = 0, bmeHum = 0, bmePres = 0;
+
+uint8_t bmeReadReg(uint8_t reg) {
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission();
+  Wire.requestFrom(BME_ADDR, (uint8_t)1);
+  return Wire.read();
+}
+
+void bmeReadRegs(uint8_t reg, uint8_t *buf, uint8_t len) {
+  Wire.beginTransmission(BME_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission();
+  Wire.requestFrom(BME_ADDR, len);
+  for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
+}
+
+void bmeReadCalibration() {
+  uint8_t c[26];
+  bmeReadRegs(BME_REG_CAL0, c, 26);
+  bT1 = c[0]|(c[1]<<8); bT2 = c[2]|(c[3]<<8); bT3 = c[4]|(c[5]<<8);
+  bP1 = c[6]|(c[7]<<8); bP2 = c[8]|(c[9]<<8); bP3 = c[10]|(c[11]<<8);
+  bP4 = c[12]|(c[13]<<8); bP5 = c[14]|(c[15]<<8); bP6 = c[16]|(c[17]<<8);
+  bP7 = c[18]|(c[19]<<8); bP8 = c[20]|(c[21]<<8); bP9 = c[22]|(c[23]<<8);
+  bH1 = c[25];
+  uint8_t h[7];
+  bmeReadRegs(BME_REG_CAL26, h, 7);
+  bH2 = h[0]|(h[1]<<8); bH3 = h[2];
+  bH4 = (h[3]<<4)|(h[4]&0x0F); bH5 = (h[5]<<4)|(h[4]>>4); bH6 = h[6];
+}
+
+float bmeCompTemp(int32_t adc) {
+  int32_t v1 = ((((adc>>3)-((int32_t)bT1<<1)))*(int32_t)bT2)>>11;
+  int32_t v2 = (((((adc>>4)-(int32_t)bT1)*((adc>>4)-(int32_t)bT1))>>12)*(int32_t)bT3)>>14;
+  bme_t_fine = v1+v2;
+  return (bme_t_fine*5+128)/256/100.0f;
+}
+
+float bmeCompPres(int32_t adc) {
+  int64_t v1 = (int64_t)bme_t_fine - 128000;
+  int64_t v2 = v1*v1*(int64_t)bP6 + ((v1*(int64_t)bP5)<<17) + ((int64_t)bP4<<35);
+  v1 = ((v1*v1*(int64_t)bP3)>>8) + ((v1*(int64_t)bP2)<<12);
+  v1 = (((int64_t)1<<47)+v1)*(int64_t)bP1>>33;
+  if (v1==0) return 0;
+  int64_t p = 1048576-adc;
+  p = (((p<<31)-v2)*3125)/v1;
+  v1 = ((int64_t)bP9*(p>>13)*(p>>13))>>25;
+  v2 = ((int64_t)bP8*p)>>19;
+  return ((p+v1+v2)>>8)/256.0f/100.0f;
+}
+
+float bmeCompHum(int32_t adc) {
+  int32_t v = bme_t_fine - 76800;
+  v = (((adc<<14)-((int32_t)bH4<<20)-((int32_t)bH5*v))+16384)>>15;
+  v = v*(((((((v*(int32_t)bH6)>>10)*(((v*(int32_t)bH3)>>11)+32768))>>10)+2097152)*(int32_t)bH2+8192)>>14);
+  v = v-(((((v>>15)*(v>>15))>>7)*(int32_t)bH1)>>4);
+  if (v<0) v=0; if (v>419430400) v=419430400;
+  return (v>>12)/1024.0f;
+}
+
+bool bmeInit() {
+  uint8_t id = bmeReadReg(BME_REG_ID);
+  if (id != 0x60 && id != 0x58) return false;
+  bmeReadCalibration();
+  Wire.beginTransmission(BME_ADDR); Wire.write(BME_REG_HUM); Wire.write(0x01); Wire.endTransmission();
+  Wire.beginTransmission(BME_ADDR); Wire.write(BME_REG_MEAS); Wire.write(0x27); Wire.endTransmission();
+  Wire.beginTransmission(BME_ADDR); Wire.write(BME_REG_CFG); Wire.write(0xA0); Wire.endTransmission();
+  return true;
+}
+
+void bmeRead() {
+  uint8_t buf[8];
+  bmeReadRegs(BME_REG_DATA, buf, 8);
+  int32_t pRaw = ((int32_t)buf[0]<<12)|((int32_t)buf[1]<<4)|(buf[2]>>4);
+  int32_t tRaw = ((int32_t)buf[3]<<12)|((int32_t)buf[4]<<4)|(buf[5]>>4);
+  int32_t hRaw = ((int32_t)buf[6]<<8)|buf[7];
+  bmeTemp = bmeCompTemp(tRaw);
+  bmePres = bmeCompPres(pRaw);
+  bmeHum  = bmeCompHum(hRaw);
+}
+
+// 24h rolling history for the env chart (sampled every 5 min, same as sat chart)
+const int      ENV_HIST_N = 288;
+int16_t  tempHist[ENV_HIST_N];     // temp * 10
+uint8_t  humHist[ENV_HIST_N];      // humidity rounded
+uint16_t presHist[ENV_HIST_N];     // pressure * 10 (e.g. 9984 = 998.4 hPa)
+int      envHistLen = 0;
+
+void pushEnvHist() {
+  int t = (int)(bmeTemp * 10.0f);
+  int h = (int)(bmeHum + 0.5f);
+  int p = (int)(bmePres * 10.0f + 0.5f);
+  if (h > 255) h = 255; if (h < 0) h = 0;
+  if (p > 65535) p = 65535; if (p < 0) p = 0;
+  if (envHistLen < ENV_HIST_N) {
+    tempHist[envHistLen] = (int16_t)t;
+    humHist[envHistLen] = (uint8_t)h;
+    presHist[envHistLen] = (uint16_t)p;
+    envHistLen++;
+  } else {
+    for (int i = 1; i < ENV_HIST_N; i++) { tempHist[i-1] = tempHist[i]; humHist[i-1] = humHist[i]; presHist[i-1] = presHist[i]; }
+    tempHist[ENV_HIST_N-1] = (int16_t)t;
+    humHist[ENV_HIST_N-1] = (uint8_t)h;
+    presHist[ENV_HIST_N-1] = (uint16_t)p;
+  }
+}
+
+// ---------- weather forecast (pressure-trend + humidity heuristic) ----------
+
+enum Weather { W_WAIT, W_STORM, W_RAIN, W_CHANGE, W_FAIR, W_STABLE };
+Weather wxState = W_WAIT;
+float wxDeltaP = 0;   // 3h pressure change in hPa
+
+void evalWeather() {
+  // Need at least 36 samples (36 * 5 min = 3 h) of pressure history
+  if (envHistLen < 36) { wxState = W_WAIT; return; }
+  uint16_t pNow = presHist[envHistLen - 1];
+  uint16_t p3h  = presHist[envHistLen - 36];
+  wxDeltaP = (pNow - p3h) / 10.0f;  // hPa change over 3h
+  uint8_t hNow = humHist[envHistLen - 1];
+
+  if (wxDeltaP <= -3.0f) {
+    wxState = (hNow >= 80) ? W_STORM : W_RAIN;
+  } else if (wxDeltaP <= -1.5f) {
+    wxState = (hNow >= 80) ? W_RAIN : W_CHANGE;
+  } else if (wxDeltaP >= 1.5f) {
+    wxState = W_FAIR;
+  } else {
+    wxState = W_STABLE;
+  }
+}
+
+const char* wxLabel() {
+  switch (wxState) {
+    case W_STORM:  return "STORM LIKELY";
+    case W_RAIN:   return "RAIN POSSIBLE";
+    case W_CHANGE: return "CHANGE";
+    case W_FAIR:   return "FAIR";
+    case W_STABLE: return "STABLE";
+    default:       return "WAIT";
+  }
+}
+
+uint16_t wxColor() {
+  switch (wxState) {
+    case W_STORM:  return TFT_RED;
+    case W_RAIN:   return TFT_YELLOW;
+    case W_CHANGE: return TFT_ORANGE;
+    case W_FAIR:   return TFT_GREEN;
+    case W_STABLE: return TFT_LIGHTGREY;
+    default:       return TFT_DARKGREY;
   }
 }
 
@@ -403,7 +577,7 @@ void drawDetail() {
 
 void pollButtons() {
   bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 4; if (screenOn) drawPage(); }
+  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 5; if (screenOn) drawPage(); }
   prevKeyC = k;
 
   bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
@@ -506,7 +680,7 @@ void drawDust() {
 
   const int X = 22, Y = 82, W = 288, H = 120;
   spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  spr.drawString("dust activity (2 h)", X, 68);
+  spr.drawString("dust activity (24 h)", X, 68);
   spr.drawRect(X, Y, W, H, TFT_DARKGREY);
   int mx = 10;   // in ratio*10 units, i.e. floor of 1.0%
   for (int i = 0; i < dustHistLen; i++) if (dustHist[i] > mx) mx = dustHist[i];
@@ -521,15 +695,122 @@ void drawDust() {
     prevX = x; prevY = y;
   }
   spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  spr.drawString("-2h", X, Y + H + 3);
-  spr.drawString("now", X + W - 18, Y + H + 3);
+  if (gps.time.isValid()) {
+    int hh = gps.time.hour();
+    int hrs[4] = { hh, (hh + 8) % 24, (hh + 16) % 24, hh };
+    int xs[4]  = { X, X + W / 3, X + 2 * W / 3, X + W - 12 };
+    for (int i = 0; i < 4; i++) {
+      char t[4]; snprintf(t, sizeof(t), "%02d", hrs[i]);
+      spr.drawString(t, xs[i], Y + H + 3);
+    }
+  } else {
+    spr.drawString("-24h", X, Y + H + 3);
+    spr.drawString("now", X + W - 18, Y + H + 3);
+  }
+}
+
+void drawEnv() {
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.setTextSize(2);
+  if (!bmeOk) {
+    spr.setTextColor(TFT_RED, TFT_BLACK);
+    spr.drawString("BME280 not found", 8, 26);
+    return;
+  }
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  char l[40];
+  snprintf(l, sizeof(l), "%.1f C", bmeTemp);
+  spr.drawString(l, 8, 26);
+  spr.setTextColor(TFT_GREEN, TFT_BLACK);
+  snprintf(l, sizeof(l), "%.0f %%RH", bmeHum);
+  spr.drawString(l, 140, 26);
+  spr.setTextColor(TFT_YELLOW, TFT_BLACK);
+  snprintf(l, sizeof(l), "%.1f hPa", bmePres);
+  spr.drawString(l, 8, 50);
+  // weather forecast
+  spr.setTextColor(wxColor(), TFT_BLACK);
+  if (wxState != W_WAIT) {
+    char wx[32];
+    snprintf(wx, sizeof(wx), "%s (%.1f)", wxLabel(), wxDeltaP);
+    spr.drawString(wx, 160, 50);
+  } else {
+    spr.setTextSize(1);
+    spr.drawString("forecast in ~3h", 170, 54);
+    spr.setTextSize(2);
+  }
+
+  // 24h chart: temp (cyan) + humidity (green) + pressure (yellow)
+  const int X = 22, Y = 82, W = 288, H = 120;
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);      spr.drawString("temp", X, 68);
+  spr.setTextColor(TFT_GREEN, TFT_BLACK);     spr.drawString("hum", X + 34, 68);
+  spr.setTextColor(TFT_YELLOW, TFT_BLACK);    spr.drawString("pres", X + 60, 68);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString("(24 h)", X + 96, 68);
+  spr.drawRect(X, Y, W, H, TFT_DARKGREY);
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  if (gps.time.isValid()) {
+    int hh = gps.time.hour();
+    int hrs[4] = { hh, (hh + 8) % 24, (hh + 16) % 24, hh };
+    int xs[4]  = { X, X + W / 3, X + 2 * W / 3, X + W - 12 };
+    for (int i = 0; i < 4; i++) {
+      char t[4]; snprintf(t, sizeof(t), "%02d", hrs[i]);
+      spr.drawString(t, xs[i], Y+H+3);
+    }
+  } else {
+    spr.drawString("-24h", X, Y+H+3);
+    spr.drawString("now", X+W-18, Y+H+3);
+  }
+
+  if (envHistLen < 2) return;
+
+  // find temp range
+  int16_t tMin = tempHist[0], tMax = tempHist[0];
+  for (int i = 1; i < envHistLen; i++) {
+    if (tempHist[i] < tMin) tMin = tempHist[i];
+    if (tempHist[i] > tMax) tMax = tempHist[i];
+  }
+  if (tMax - tMin < 20) { int16_t mid = (tMax+tMin)/2; tMin = mid-10; tMax = mid+10; }
+
+  // find pressure range
+  uint16_t pMin = presHist[0], pMax = presHist[0];
+  for (int i = 1; i < envHistLen; i++) {
+    if (presHist[i] < pMin) pMin = presHist[i];
+    if (presHist[i] > pMax) pMax = presHist[i];
+  }
+  if (pMax - pMin < 20) { uint16_t mid = (pMax+pMin)/2; pMin = mid > 10 ? mid-10 : 0; pMax = mid+10; }
+
+  // temp axis labels (left)
+  snprintf(l, sizeof(l), "%.0f", tMax/10.0f);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK); spr.drawString(l, 2, Y-3);
+  snprintf(l, sizeof(l), "%.0f", tMin/10.0f);
+  spr.drawString(l, 2, Y+H-6);
+
+  // pressure axis labels (right)
+  snprintf(l, sizeof(l), "%.0f", pMax/10.0f);
+  spr.setTextColor(TFT_YELLOW, TFT_BLACK); spr.drawString(l, X+W+2, Y-3);
+  snprintf(l, sizeof(l), "%.0f", pMin/10.0f);
+  spr.drawString(l, X+W+2, Y+H-6);
+
+  // plot all three lines
+  int ptx=-1, pty=0, phx=-1, phy=0, ppx=-1, ppy=0;
+  for (int i = 0; i < envHistLen; i++) {
+    int x = X + (int)((long)(W-2)*i/(envHistLen-1));
+    int yt = Y+H-1 - (int)((long)(H-2)*(tempHist[i]-tMin)/(tMax-tMin));
+    int yh = Y+H-1 - (int)((long)(H-2)*humHist[i]/100);
+    int yp = Y+H-1 - (pMax==pMin ? (H-2)/2 : (int)((long)(H-2)*(presHist[i]-pMin)/(pMax-pMin)));
+    if (ptx >= 0) spr.drawLine(ptx, pty, x, yt, TFT_CYAN);
+    if (phx >= 0) spr.drawLine(phx, phy, x, yh, TFT_GREEN);
+    if (ppx >= 0) spr.drawLine(ppx, ppy, x, yp, TFT_YELLOW);
+    ptx=x; pty=yt; phx=x; phy=yh; ppx=x; ppy=yp;
+  }
 }
 
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
     File f = SD.open(LOG_PATH, FILE_APPEND);
-    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc"); f.close(); }
+    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather"); f.close(); }
   }
 }
 
@@ -548,13 +829,13 @@ void logRow() {
     snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              gps.date.year(), gps.date.month(), gps.date.day(),
              gps.time.hour(), gps.time.minute(), gps.time.second());
-  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%.2f,%.1f\n",
+  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%.2f,%.1f,%.2f,%.1f,%.1f,%s\n",
            utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
            countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
-           anomCode, dustRatio, dustConc);
+           anomCode, dustRatio, dustConc, bmeTemp, bmeHum, bmePres, wxLabel());
   f.close();
 }
 
@@ -562,7 +843,7 @@ void drawPage() {
   spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
-  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else drawDust();
+  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else if (page == 3) drawDust(); else drawEnv();
   if (anomalyActive()) {   // reception-health alert banner, over any page
     spr.fillRect(0, 224, 320, 16, TFT_RED);
     spr.setTextSize(2);
@@ -592,6 +873,8 @@ void setup() {
   Wire.begin();                 // fuel gauge is optional (battery chassis only)
   batOk = lipo.begin();
   if (batOk) lipo.setCapacity(650);
+  bmeOk = bmeInit();
+  if (bmeOk) bmeRead();
 
   tft.begin();
   tft.setRotation(3);
@@ -615,16 +898,20 @@ void loop() {
     lastHistMs = millis();
     expireSats();
     pushHist(countInView(), countInView() - countPositioned());
+    pushDustHist(dustRatio);
+    if (bmeOk) { pushEnvHist(); evalWeather(); }
   }
 
   if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
     expireSats();
     evalAnomaly();
+    if (bmeOk) bmeRead();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
-    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d\n",
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d | T=%.1f H=%.0f P=%.0f\n",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
-      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS));
+      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
+      bmeTemp, bmeHum, bmePres);
   }
 
   if (millis() - lastLogMs >= LOG_PERIOD_MS) {
