@@ -4,15 +4,18 @@ A Wio Terminal that visualizes what's *above* it. **Milestone 1 — GPS sky view
 a live polar "radar" of every satellite the Air530 GNSS module can hear
 (GPS + GLONASS + Galileo + BeiDou), colored by constellation, plus a numeric
 detail page, a 24-hour satellite-count chart, reception-anomaly alerts, the
-live position of **Mars** on the sky, and microSD logging with a real UTC clock
-from the satellites. **Plus a first extra sensor:** a Grove Dust Sensor feeding
-a relative "dust activity" page. **Second extra sensor:** a BME280
-(temperature, humidity, pressure) with a 24-hour chart and a
-**pressure-trend weather forecaster** (storm / rain / change / fair / stable).
+live positions of the **Sun, Moon, and five naked-eye planets** on the sky
+(computed from a low-precision ephemeris using GPS position + UTC), and microSD
+logging with a real UTC clock from the satellites. **Plus a first extra
+sensor:** a Grove Dust Sensor feeding a relative "dust activity" page.
+**Second extra sensor:** a BME280 (temperature, humidity, pressure) with a
+24-hour chart and a **pressure-trend weather forecaster** (storm / rain /
+change / fair / stable). A **24H Observation** page shows per-constellation
+satellite statistics over the last 24 hours.
 
 <img src="docs/page-sky.jpg" width="480" alt="Sky page: polar radar plot with GPS (green) and BeiDou (magenta) satellites, elevation rings, compass N/E/S/W, Mars indicator, battery 91%, SD badge">
 
-All five display pages:
+All six display pages:
 
 <img src="docs/page-sky.jpg" width="240" alt="Sky page"> <img src="docs/page-detail.jpg" width="240" alt="Detail page">
 <img src="docs/page-chart.jpg" width="240" alt="Chart page"> <img src="docs/page-dust.jpg" width="240" alt="Dust page">
@@ -38,7 +41,7 @@ The Air530 must connect to the Wio's hardware UART on the **40-pin header**:
 | GPS wire | Wio header pin |
 |----------|----------------|
 | TX       | **pin 10** (BCM15 / RXD / `Serial1` RX) |
-| RX       | pin 8 (BCM14 / TXD) — optional, GPS only transmits |
+| RX       | **pin 8** (BCM14 / TXD / `Serial1` TX) — used for PGKC config commands |
 | VCC      | pin 1 (3V3) |
 | GND      | pin 6 (GND) |
 
@@ -103,8 +106,8 @@ start takes 1–2 minutes to a fix.
 
 ## Display & controls
 
-Five pages, cycled with the **top-left button (KEY_C)**: Sky → Detail → Chart →
-Dust → Env → back to Sky. The **5-way switch center-press toggles the screen**
+Six pages, cycled with the **top-left button (KEY_C)**: Sky → Detail → Chart →
+Dust → Env → Obs → back to Sky. The **5-way switch center-press toggles the screen**
 on/off (GPS parsing, dust polling, BME280 reads, and SD logging keep running
 while it's off — the backlight is the main power draw).
 
@@ -116,9 +119,10 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   constellation** (GPS green, GLONASS cyan, Galileo orange, BeiDou magenta),
   sized by signal strength. Satellites that are heard but not yet positioned
   (before a fix, or without ephemeris) show as an "N unlocated" count.
-  **Mars** is plotted as a red circled dot labelled "Mars" at its true
-  altitude/azimuth when above the horizon (a low-precision ephemeris computed
-  from the GPS position + UTC; "Mars below horizon" otherwise). Note the plot
+  The **Sun, Moon, and five naked-eye planets** (Mercury, Venus, Mars,
+  Jupiter, Saturn) are plotted at their true alt/azimuth when above the
+  horizon, each with a distinct color and label. Positions come from a
+  low-precision Schlyter ephemeris computed from GPS position + UTC. The plot
   assumes the device is pointed north — there's no on-board compass.
 - **Detail page** — numeric: in view (and positioned), per-constellation
   counts, satellites used, fix type, HDOP, strongest SNR, lat/lon, altitude,
@@ -140,6 +144,10 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   Below the values: a 24-hour triple-line chart — temperature (cyan, left
   axis), humidity (green), pressure (yellow, right axis auto-scaled) — with
   UTC hour markers. Sampled every 5 minutes.
+- **Obs page** — 24-hour observation statistics table: per-constellation
+  (GPS, GLONASS, Galileo, BeiDou) rows showing current in-view and used
+  counts, plus 24-hour peak, average, and minimum values for each. Updated
+  every 5 minutes from the rolling history buffer.
 
 ### Reception anomaly detection
 

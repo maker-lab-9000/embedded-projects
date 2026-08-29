@@ -129,7 +129,10 @@ void feedGps() {
     gps.encode(c);
     if (c == '\n') {
       line[linePos] = 0;
-      if (linePos > 6 && !strncmp(line + 3, "GSV", 3)) parseGsv(line);
+      if (linePos > 6) {
+        if (!strncmp(line + 3, "GSV", 3)) parseGsv(line);
+        else if (!strncmp(line + 3, "GSA", 3)) parseGsa(line);
+      }
       linePos = 0;
     } else if (c != '\r' && linePos < (int)sizeof(line) - 1) {
       line[linePos++] = c;
@@ -139,6 +142,61 @@ void feedGps() {
 
 int countInView() { return satCount; }
 int countConstel(uint8_t c) { int n = 0; for (int i=0;i<satCount;i++) if (sats[i].constel==c) n++; return n; }
+
+// ---------- GSA parsing (per-constellation "used" counts) ----------
+
+uint8_t gsaUsedCount[5] = {0};   // GPS, GLO, GAL, BDS, QZS
+uint32_t gsaLastMs = 0;
+
+uint8_t findConstelByPrn(int prn) {
+  for (int i = 0; i < satCount; i++)
+    if (sats[i].prn == prn) return sats[i].constel;
+  return C_OTHER;
+}
+
+void parseGsa(const char* s) {
+  if (!checksumOk(s)) return;
+  char buf[128]; strncpy(buf, s, sizeof(buf)-1); buf[sizeof(buf)-1] = 0;
+  char* star = strchr(buf, '*'); if (star) *star = 0;
+  const int MAXF = 20; char* f[MAXF]; int nf = 0;
+  f[nf++] = buf;
+  for (char* p = buf; *p && nf < MAXF; p++) {
+    if (*p == ',') { *p = 0; f[nf++] = p + 1; }
+  }
+  if (millis() - gsaLastMs > 2000) memset(gsaUsedCount, 0, sizeof(gsaUsedCount));
+  gsaLastMs = millis();
+
+  uint8_t constel = talkerConstel(s);
+
+  // GNGSA with system ID field (NMEA 4.10+)
+  if (constel == C_OTHER && s[1] == 'G' && s[2] == 'N' && nf > 18 && f[18][0]) {
+    int sysId = atoi(f[18]);
+    static const uint8_t sysMap[] = {C_OTHER, C_GPS, C_GLO, C_GAL, C_BDS, C_QZS};
+    if (sysId >= 1 && sysId <= 5) constel = sysMap[sysId];
+  }
+
+  // GNGSA without system ID: match each PRN against the sat table
+  if (constel == C_OTHER && s[1] == 'G' && s[2] == 'N') {
+    uint8_t perC[5] = {0};
+    for (int i = 3; i <= 14 && i < nf; i++) {
+      if (!f[i][0]) continue;
+      int prn = atoi(f[i]);
+      if (prn <= 0) continue;
+      uint8_t c = findConstelByPrn(prn);
+      if (c < 5) perC[c]++;
+    }
+    for (int c = 0; c < 5; c++) gsaUsedCount[c] = perC[c];
+    return;
+  }
+
+  if (constel >= 5) return;
+  int count = 0;
+  for (int i = 3; i <= 14 && i < nf; i++)
+    if (f[i][0] && atoi(f[i]) > 0) count++;
+  gsaUsedCount[constel] = count;
+}
+
+int countConstelUsed(uint8_t c) { return (c < 5) ? gsaUsedCount[c] : 0; }
 const char* fixStr() {
   if (!gps.location.isValid()) return "NO FIX";
   return gps.altitude.isValid() ? "3D FIX" : "2D FIX";
@@ -161,61 +219,179 @@ uint16_t constelColor(uint8_t c) {
 
 int countPositioned() { int n=0; for (int i=0;i<satCount;i++) if (sats[i].elev>=0) n++; return n; }
 
-// ---------- Mars position (Schlyter low-precision ephemeris) ----------
+// ---------- Solar system ephemeris (Schlyter low-precision) ----------
 
+static const double R2 = M_PI / 180.0;
 static double revd(double x) { x = fmod(x, 360.0); if (x < 0) x += 360.0; return x; }
 
-// Mars altitude/azimuth in degrees for the current GPS location + UTC.
-// Returns false until position and time are valid. az: 0=N, 90=E, 180=S, 270=W.
-bool marsAltAz(double &altDeg, double &azDeg) {
-  if (!gps.location.isValid() || !gps.date.isValid() || !gps.time.isValid()) return false;
-  const double R2 = M_PI / 180.0;
-  double Y = gps.date.year(), M = gps.date.month(), D = gps.date.day();
-  double UT = gps.time.hour() + gps.time.minute() / 60.0 + gps.time.second() / 3600.0;
-  long dn = 367L*(long)Y - 7L*((long)Y + ((long)M + 9)/12)/4 + 275L*(long)M/9 + (long)D - 730530L;
-  double d = (double)dn + UT / 24.0;
-  double ecl = 23.4393 - 3.563e-7 * d;
+enum Body { B_SUN, B_MOON, B_MERCURY, B_VENUS, B_MARS, B_JUPITER, B_SATURN, B_COUNT };
 
-  // Sun (Earth's position + sidereal-time reference)
-  double ws = 282.9404 + 4.70935e-5 * d, es = 0.016709 - 1.151e-9 * d;
-  double Ms = revd(356.0470 + 0.9856002585 * d);
-  double Es = Ms + (1/R2)*es*sin(Ms*R2)*(1 + es*cos(Ms*R2));
-  double xvs = cos(Es*R2) - es, yvs = sqrt(1 - es*es)*sin(Es*R2);
-  double vs = atan2(yvs, xvs)/R2, rs = sqrt(xvs*xvs + yvs*yvs);
-  double lons = revd(vs + ws);
-  double xs = rs*cos(lons*R2), ys = rs*sin(lons*R2);
-  double Ls = revd(ws + Ms);
+struct BodyResult { double alt, az; bool valid; };
+BodyResult bodies[B_COUNT];
 
-  // Mars orbital elements
-  double N = 49.5574 + 2.11081e-5*d, inc = 1.8497 - 1.78e-8*d, w = 286.5016 + 2.92961e-5*d;
-  double a = 1.523688, e = 0.093405 + 2.516e-9*d;
-  double Mm = revd(18.6021 + 0.5240207766*d);
-  double E = Mm + (1/R2)*e*sin(Mm*R2)*(1 + e*cos(Mm*R2));
-  for (int it = 0; it < 4; it++) E = E - (E - (1/R2)*e*sin(E*R2) - Mm) / (1 - e*cos(E*R2));
-  double xv = a*(cos(E*R2) - e), yv = a*sqrt(1 - e*e)*sin(E*R2);
-  double v = atan2(yv, xv)/R2, r = sqrt(xv*xv + yv*yv);
-  double xh = r*(cos(N*R2)*cos((v+w)*R2) - sin(N*R2)*sin((v+w)*R2)*cos(inc*R2));
-  double yh = r*(sin(N*R2)*cos((v+w)*R2) + cos(N*R2)*sin((v+w)*R2)*cos(inc*R2));
-  double zh = r*(sin((v+w)*R2)*sin(inc*R2));
-  double xg = xh + xs, yg = yh + ys, zg = zh;
-  double xe = xg, ye = yg*cos(ecl*R2) - zg*sin(ecl*R2), ze = yg*sin(ecl*R2) + zg*cos(ecl*R2);
-  double RA = revd(atan2(ye, xe)/R2);
-  double Dec = atan2(ze, sqrt(xe*xe + ye*ye))/R2;
-
-  // topocentric alt/az
-  double lat = gps.location.lat(), lon = gps.location.lng();
-  double GMST0 = revd(Ls + 180.0);
-  double LST = revd(GMST0 + UT*15.0 + lon);
+static void raDecToAltAz(double RA, double Dec, double LST, double lat,
+                          double &alt, double &az) {
   double HA = revd(LST - RA);
   double haR = HA*R2, decR = Dec*R2, latR = lat*R2;
   double sinAlt = sin(latR)*sin(decR) + cos(latR)*cos(decR)*cos(haR);
-  double alt = asin(sinAlt)/R2;
+  alt = asin(sinAlt)/R2;
   double cosAz = (sin(decR) - sin(latR)*sinAlt) / (cos(latR)*cos(alt*R2));
   cosAz = cosAz > 1 ? 1 : (cosAz < -1 ? -1 : cosAz);
-  double az = acos(cosAz)/R2;
+  az = acos(cosAz)/R2;
   if (sin(haR) > 0) az = 360.0 - az;
-  altDeg = alt; azDeg = az;
-  return true;
+}
+
+static void planetHelio(double d,
+    double N, double inc, double w, double a, double e, double M,
+    double &xh, double &yh, double &zh) {
+  M = revd(M);
+  double E = M + (1/R2)*e*sin(M*R2)*(1 + e*cos(M*R2));
+  for (int it = 0; it < 4; it++)
+    E = E - (E - (1/R2)*e*sin(E*R2) - M) / (1 - e*cos(E*R2));
+  double xv = a*(cos(E*R2) - e), yv = a*sqrt(1 - e*e)*sin(E*R2);
+  double v = atan2(yv, xv)/R2, r = sqrt(xv*xv + yv*yv);
+  xh = r*(cos(N*R2)*cos((v+w)*R2) - sin(N*R2)*sin((v+w)*R2)*cos(inc*R2));
+  yh = r*(sin(N*R2)*cos((v+w)*R2) + cos(N*R2)*sin((v+w)*R2)*cos(inc*R2));
+  zh = r*(sin((v+w)*R2)*sin(inc*R2));
+}
+
+void computeBodies() {
+  for (int i = 0; i < B_COUNT; i++) bodies[i].valid = false;
+  if (!gps.location.isValid() || !gps.date.isValid() || !gps.time.isValid()) return;
+
+  double Y = gps.date.year(), Mo = gps.date.month(), D = gps.date.day();
+  double UT = gps.time.hour() + gps.time.minute()/60.0 + gps.time.second()/3600.0;
+  long dn = 367L*(long)Y - 7L*((long)Y+((long)Mo+9)/12)/4 + 275L*(long)Mo/9 + (long)D - 730530L;
+  double d = (double)dn + UT/24.0;
+  double ecl = 23.4393 - 3.563e-7*d;
+  double lat = gps.location.lat(), lon = gps.location.lng();
+
+  // Sun (also gives Earth's heliocentric position for geocentric conversion)
+  double ws = 282.9404 + 4.70935e-5*d, es = 0.016709 - 1.151e-9*d;
+  double Ms = revd(356.0470 + 0.9856002585*d);
+  double Es = Ms + (1/R2)*es*sin(Ms*R2)*(1 + es*cos(Ms*R2));
+  double xvs = cos(Es*R2)-es, yvs = sqrt(1-es*es)*sin(Es*R2);
+  double vs = atan2(yvs,xvs)/R2, rs = sqrt(xvs*xvs+yvs*yvs);
+  double lons = revd(vs+ws);
+  double xs = rs*cos(lons*R2), ys = rs*sin(lons*R2);
+  double Ls = revd(ws+Ms);
+  double GMST0 = revd(Ls+180.0);
+  double LST = revd(GMST0 + UT*15.0 + lon);
+
+  // Sun RA/Dec (geocentric = opposite of Earth's helio position)
+  {
+    double xsG = -xs, ysG = -ys;
+    double ye = ysG*cos(ecl*R2), ze = ysG*sin(ecl*R2);
+    double RA = revd(atan2(ye, xsG)/R2);
+    double Dec = atan2(ze, sqrt(xsG*xsG+ye*ye))/R2;
+    raDecToAltAz(RA, Dec, LST, lat, bodies[B_SUN].alt, bodies[B_SUN].az);
+    bodies[B_SUN].valid = true;
+  }
+
+  // Moon (simplified — Schlyter)
+  {
+    double Nm = revd(125.1228 - 0.0529538083*d);
+    double im = 5.1454;
+    double wm = revd(318.0634 + 0.1643573223*d);
+    double am = 60.2666; // Earth radii
+    double em = 0.054900;
+    double Mm = revd(115.3654 + 13.0649929509*d);
+    double Em = Mm + (1/R2)*em*sin(Mm*R2)*(1+em*cos(Mm*R2));
+    for (int it=0;it<4;it++)
+      Em = Em-(Em-(1/R2)*em*sin(Em*R2)-Mm)/(1-em*cos(Em*R2));
+    double xv = am*(cos(Em*R2)-em), yv = am*sqrt(1-em*em)*sin(Em*R2);
+    double vm = atan2(yv,xv)/R2, rm = sqrt(xv*xv+yv*yv);
+    double xh = rm*(cos(Nm*R2)*cos((vm+wm)*R2) - sin(Nm*R2)*sin((vm+wm)*R2)*cos(im*R2));
+    double yh = rm*(sin(Nm*R2)*cos((vm+wm)*R2) + cos(Nm*R2)*sin((vm+wm)*R2)*cos(im*R2));
+    double zh = rm*(sin((vm+wm)*R2)*sin(im*R2));
+    // perturbations
+    double Lm = revd(Nm+wm+Mm), Df = revd(Lm-Ls), F = revd(Lm-Nm);
+    double dlon = -1.274*sin((Mm-2*Df)*R2) + 0.658*sin(2*Df*R2)
+                  -0.186*sin(Ms*R2) - 0.059*sin((2*Mm-2*Df)*R2)
+                  -0.057*sin((Mm-2*Df+Ms)*R2) + 0.053*sin((Mm+2*Df)*R2)
+                  +0.046*sin((2*Df-Ms)*R2) + 0.041*sin((Mm-Ms)*R2)
+                  -0.035*sin(Df*R2) - 0.031*sin((Mm+Ms)*R2)
+                  -0.015*sin((2*F-2*Df)*R2) + 0.011*sin((Mm-4*Df)*R2);
+    double dlat = -0.173*sin((F-2*Df)*R2) - 0.055*sin((Mm-F-2*Df)*R2)
+                  -0.046*sin((Mm+F-2*Df)*R2) + 0.033*sin((F+2*Df)*R2)
+                  +0.017*sin((2*Mm+F)*R2);
+    double drad = -0.58*cos((Mm-2*Df)*R2) - 0.46*cos(2*Df*R2);
+    double lonEcl = atan2(yh,xh)/R2 + dlon;
+    double latEcl = atan2(zh,sqrt(xh*xh+yh*yh))/R2 + dlat;
+    rm = rm + drad;
+    double xec = rm*cos(latEcl*R2)*cos(lonEcl*R2);
+    double yec = rm*cos(latEcl*R2)*sin(lonEcl*R2);
+    double zec = rm*sin(latEcl*R2);
+    double xe = xec, ye2 = yec*cos(ecl*R2)-zec*sin(ecl*R2), ze2 = yec*sin(ecl*R2)+zec*cos(ecl*R2);
+    double RA = revd(atan2(ye2,xe)/R2);
+    double Dec = atan2(ze2,sqrt(xe*xe+ye2*ye2))/R2;
+    raDecToAltAz(RA, Dec, LST, lat, bodies[B_MOON].alt, bodies[B_MOON].az);
+    bodies[B_MOON].valid = true;
+  }
+
+  // Planets — orbital elements at epoch d, geocentric via Earth offset
+  struct PlanetElems { int body; double N0,N1, i0,i1, w0,w1, a, e0,e1, M0,M1; };
+  static const PlanetElems elems[] = {
+    { B_MERCURY,  48.3313,3.24587e-5,  7.0047,5.00e-8,  29.1241,1.01444e-5,
+      0.387098, 0.205635,5.59e-10,  168.6562,4.0923344368 },
+    { B_VENUS, 76.6799,2.46590e-5, 3.3946,2.75e-8, 54.8910,1.38374e-5,
+      0.723330, 0.006773,-1.302e-9, 48.0052,1.6021302244 },
+    { B_MARS, 49.5574,2.11081e-5, 1.8497,-1.78e-8, 286.5016,2.92961e-5,
+      1.523688, 0.093405,2.516e-9, 18.6021,0.5240207766 },
+    { B_JUPITER, 100.4542,2.76854e-5, 1.3030,-1.557e-7, 273.8777,1.64505e-5,
+      5.20256, 0.048498,4.469e-9, 19.8950,0.0830853001 },
+    { B_SATURN, 113.6634,2.38980e-5, 2.4886,-1.081e-7, 339.3939,2.97661e-5,
+      9.55475, 0.055546,-9.499e-9, 316.9670,0.0334442282 },
+  };
+
+  for (int p = 0; p < 5; p++) {
+    const PlanetElems &el = elems[p];
+    double N = el.N0+el.N1*d, inc = el.i0+el.i1*d, w = el.w0+el.w1*d;
+    double e = el.e0+el.e1*d, M = el.M0+el.M1*d;
+    double xh,yh,zh;
+    planetHelio(d, N,inc,w,el.a,e,M, xh,yh,zh);
+
+    // Jupiter-Saturn mutual perturbation
+    if (el.body == B_JUPITER || el.body == B_SATURN) {
+      double Mj = revd(19.8950+0.0830853001*d);
+      double Ms2 = revd(316.9670+0.0334442282*d);
+      if (el.body == B_JUPITER) {
+        double dlon = -0.332*sin((2*Mj-5*Ms2-67.6)*R2)
+                      -0.056*sin((2*Mj-2*Ms2+21)*R2)
+                      +0.042*sin((3*Mj-5*Ms2+21)*R2)
+                      -0.036*sin((Mj-2*Ms2)*R2)
+                      +0.022*cos((Mj-Ms2)*R2)
+                      +0.023*sin((2*Mj-3*Ms2+52)*R2);
+        double r0 = sqrt(xh*xh+yh*yh+zh*zh);
+        double lonH = atan2(yh,xh)/R2 + dlon;
+        double latH = atan2(zh,sqrt(xh*xh+yh*yh))/R2;
+        xh = r0*cos(latH*R2)*cos(lonH*R2);
+        yh = r0*cos(latH*R2)*sin(lonH*R2);
+        zh = r0*sin(latH*R2);
+      } else {
+        double dlon = +0.812*sin((2*Mj-5*Ms2-67.6)*R2)
+                      -0.229*cos((2*Mj-4*Ms2-2)*R2)
+                      +0.119*sin((Mj-2*Ms2-3)*R2)
+                      +0.046*sin((2*Mj-6*Ms2-69)*R2)
+                      +0.014*sin((Mj-3*Ms2+32)*R2);
+        double dlat = -0.020*cos((2*Mj-4*Ms2-2)*R2)
+                      +0.018*sin((2*Mj-6*Ms2-49)*R2);
+        double r0 = sqrt(xh*xh+yh*yh+zh*zh);
+        double lonH = atan2(yh,xh)/R2 + dlon;
+        double latH = atan2(zh,sqrt(xh*xh+yh*yh))/R2 + dlat;
+        xh = r0*cos(latH*R2)*cos(lonH*R2);
+        yh = r0*cos(latH*R2)*sin(lonH*R2);
+        zh = r0*sin(latH*R2);
+      }
+    }
+
+    double xg = xh+xs, yg = yh+ys, zg = zh;
+    double xe = xg, ye2 = yg*cos(ecl*R2)-zg*sin(ecl*R2), ze2 = yg*sin(ecl*R2)+zg*cos(ecl*R2);
+    double RA = revd(atan2(ye2,xe)/R2);
+    double Dec = atan2(ze2,sqrt(xe*xe+ye2*ye2))/R2;
+    raDecToAltAz(RA, Dec, LST, lat, bodies[el.body].alt, bodies[el.body].az);
+    bodies[el.body].valid = true;
+  }
 }
 
 // ---------- anomaly (reception health) ----------
@@ -505,22 +681,47 @@ void drawSky() {
     int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
     spr.fillCircle(x, y, rad, constelColor(sats[i].constel));
   }
-  // Mars: plot at its real alt/az when above the horizon.
-  double mAlt, mAz;
-  if (marsAltAz(mAlt, mAz)) {
-    if (mAlt > 0) {
-      float rr = R * (90 - mAlt) / 90.0f;
-      float aa = mAz * 0.017453292f;
-      int mxp = CX + (int)(rr * sinf(aa));
-      int myp = CY - (int)(rr * cosf(aa));
-      spr.fillCircle(mxp, myp, 3, TFT_RED);
-      spr.drawCircle(mxp, myp, 6, TFT_RED);
-      spr.setTextColor(TFT_RED, TFT_BLACK);
-      spr.drawString("Mars", mxp + 9, myp - 3);
+  // Solar system bodies
+  static const char* bodyName[] = {"Sun","Moon","Mer","Ven","Mars","Jup","Sat"};
+  static const uint16_t bodyColor[] = {
+    TFT_YELLOW, 0xFFFF, 0xAD55, 0xB7FF, TFT_RED, 0xFD20, 0xBDAD
+  };
+  int belowCount = 0;
+  for (int b = 0; b < B_COUNT; b++) {
+    if (!bodies[b].valid) continue;
+    uint16_t col = bodyColor[b];
+    if (bodies[b].alt > 0) {
+      float rr = R * (90 - bodies[b].alt) / 90.0f;
+      float aa = bodies[b].az * 0.017453292f;
+      int bx = CX + (int)(rr * sinf(aa));
+      int by = CY - (int)(rr * cosf(aa));
+      if (b == B_SUN) {
+        spr.fillCircle(bx, by, 5, col);
+        spr.drawCircle(bx, by, 7, col);
+      } else if (b == B_MOON) {
+        spr.fillCircle(bx, by, 4, col);
+        spr.drawCircle(bx, by, 6, TFT_DARKGREY);
+      } else {
+        spr.fillCircle(bx, by, 3, col);
+        spr.drawCircle(bx, by, 6, col);
+      }
+      spr.setTextColor(col, TFT_BLACK);
+      spr.drawString(bodyName[b], bx + 9, by - 3);
     } else {
-      spr.setTextColor(TFT_RED, TFT_BLACK);
-      spr.drawString("Mars below horizon", 190, 228);
+      belowCount++;
     }
+  }
+  if (belowCount > 0 && belowCount < B_COUNT) {
+    char below[64] = ""; int pos = 0;
+    for (int b = 0; b < B_COUNT; b++) {
+      if (!bodies[b].valid || bodies[b].alt > 0) continue;
+      if (pos > 0) { below[pos++] = ' '; }
+      int len = strlen(bodyName[b]);
+      memcpy(below+pos, bodyName[b], len); pos += len;
+    }
+    below[pos] = 0;
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(below, 190, 228);
   }
   // how many are heard but not yet placed (no fix / no ephemeris)
   int unp = countInView() - countPositioned();
@@ -577,7 +778,7 @@ void drawDetail() {
 
 void pollButtons() {
   bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 5; if (screenOn) drawPage(); }
+  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 6; if (screenOn) drawPage(); }
   prevKeyC = k;
 
   bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
@@ -806,6 +1007,100 @@ void drawEnv() {
   }
 }
 
+// ---------- 24h constellation observation table ----------
+
+uint8_t cVisHist[5][288];
+uint8_t cUsedHist[5][288];
+int cHistLen = 0;
+
+void pushConstelHist() {
+  for (int c = 0; c < 5; c++) {
+    uint8_t vis = countConstel(c);
+    uint8_t used = countConstelUsed(c);
+    if (cHistLen < 288) {
+      cVisHist[c][cHistLen] = vis;
+      cUsedHist[c][cHistLen] = used;
+    } else {
+      memmove(cVisHist[c], cVisHist[c]+1, 287);
+      memmove(cUsedHist[c], cUsedHist[c]+1, 287);
+      cVisHist[c][287] = vis;
+      cUsedHist[c][287] = used;
+    }
+  }
+  if (cHistLen < 288) cHistLen++;
+}
+
+void drawObs() {
+  spr.fillRect(0, 20, 320, 220, TFT_BLACK);
+  spr.setTextSize(2);
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString("24H OBSERVATION", 4, 24);
+
+  static const char* cName[] = {"USA GPS","Russia GLO","EU Galileo","China BDS","Japan QZS"};
+  static const uint8_t cMap[] = {C_GPS, C_GLO, C_GAL, C_BDS, C_QZS};
+  static const uint16_t cCol[] = {TFT_GREEN, TFT_CYAN, TFT_ORANGE, TFT_MAGENTA, TFT_YELLOW};
+
+  struct CS { int idx; float avgVis, avgUsed; uint8_t peak; };
+  CS st[5];
+  for (int i = 0; i < 5; i++) {
+    st[i].idx = i;
+    int sv = 0, su = 0, pk = 0;
+    for (int j = 0; j < cHistLen; j++) {
+      sv += cVisHist[cMap[i]][j];
+      su += cUsedHist[cMap[i]][j];
+      if (cVisHist[cMap[i]][j] > pk) pk = cVisHist[cMap[i]][j];
+    }
+    if (cHistLen > 0) {
+      st[i].avgVis = (float)sv / cHistLen;
+      st[i].avgUsed = (float)su / cHistLen;
+      st[i].peak = pk;
+    } else {
+      st[i].avgVis = countConstel(cMap[i]);
+      st[i].avgUsed = countConstelUsed(cMap[i]);
+      st[i].peak = countConstel(cMap[i]);
+    }
+  }
+  for (int i = 0; i < 4; i++)
+    for (int j = i+1; j < 5; j++)
+      if (st[j].avgVis > st[i].avgVis) { CS t = st[i]; st[i] = st[j]; st[j] = t; }
+
+  auto rDraw = [](int sz, const char* s, int rx, int y) {
+    int w = strlen(s) * 6 * sz;
+    spr.drawString(s, rx - w, y);
+  };
+
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  rDraw(1, "Visible", 198, 50);
+  rDraw(1, "Peak", 248, 50);
+  rDraw(1, "Used", 308, 50);
+
+  int y = 66;
+  for (int i = 0; i < 5; i++) {
+    int ci = st[i].idx;
+    spr.setTextSize(2);
+    spr.setTextColor(cCol[ci], TFT_BLACK);
+    spr.drawString(cName[ci], 4, y);
+    char v[8];
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    snprintf(v, sizeof(v), "%.1f", st[i].avgVis);
+    rDraw(2, v, 198, y);
+    snprintf(v, sizeof(v), "%d", st[i].peak);
+    rDraw(2, v, 248, y);
+    snprintf(v, sizeof(v), "%.1f", st[i].avgUsed);
+    rDraw(2, v, 308, y);
+    y += 26;
+  }
+
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  float hours = cHistLen * 5.0f / 60.0f;
+  char info[32];
+  if (hours >= 24.0f) snprintf(info, sizeof(info), "24h (full)");
+  else snprintf(info, sizeof(info), "%.1fh of data", hours);
+  spr.drawString(info, 4, 228);
+}
+
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
@@ -843,7 +1138,7 @@ void drawPage() {
   spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
-  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else if (page == 3) drawDust(); else drawEnv();
+  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else if (page == 3) drawDust(); else if (page == 4) drawEnv(); else drawObs();
   if (anomalyActive()) {   // reception-health alert banner, over any page
     spr.fillRect(0, 224, 320, 16, TFT_RED);
     spr.setTextSize(2);
@@ -865,6 +1160,9 @@ uint32_t lastPrint = 0;
 void setup() {
   Serial.begin(115200);
   Serial1.begin(9600);
+  delay(200);
+  Serial1.println("$PGKC115,1,1,1,1*2A");
+
   pinMode(WIO_KEY_C, INPUT_PULLUP);
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
   pinMode(LCD_BACKLIGHT, OUTPUT);
@@ -899,6 +1197,7 @@ void loop() {
     expireSats();
     pushHist(countInView(), countInView() - countPositioned());
     pushDustHist(dustRatio);
+    pushConstelHist();
     if (bmeOk) { pushEnvHist(); evalWeather(); }
   }
 
@@ -906,6 +1205,7 @@ void loop() {
     lastPrint = millis();
     expireSats();
     evalAnomaly();
+    computeBodies();
     if (bmeOk) bmeRead();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
     Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d | T=%.1f H=%.0f P=%.0f\n",
