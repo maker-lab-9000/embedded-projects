@@ -76,6 +76,7 @@ bool checksumOk(const char* s) {       // s from '$' to end (has *HH)
 
 void upsertSat(uint8_t constel, uint8_t prn, int elev, int azim, int snr) {
   if (prn == 0) return;
+  if (constel == C_GPS && prn >= 193 && prn <= 199) constel = C_QZS;
   uint32_t now = millis();
   int slot = -1;
   for (int i = 0; i < satCount; i++)
@@ -650,8 +651,8 @@ void drawHeader() {
 }
 
 void drawLegend() {
-  const char* names[] = {"GPS","GLO","GAL","BDS"};
-  uint8_t cs[] = {C_GPS,C_GLO,C_GAL,C_BDS};
+  const char* names[] = {"GPS","GLO","BDS","QZS"};
+  uint8_t cs[] = {C_GPS,C_GLO,C_BDS,C_QZS};
   spr.setTextSize(1);
   int y = 26;
   for (int i = 0; i < 4; i++) {
@@ -739,11 +740,12 @@ void drawSky() {
 int  page = 0;              // 0 = sky, 1 = detail, 2 = chart
 bool prevKeyC = HIGH;
 
-// satellite history for the chart: in-view + unlocated, over 24 h
+// satellite history for the chart: per-constellation + unlocated, over 24 h
 const int      HIST_N = 288;             // 288 samples across the 288 px chart
 const uint32_t HIST_PERIOD_MS = 300000;  // one sample / 5 min -> 288 = 24 h
 uint8_t  viewHist[HIST_N];
 uint8_t  unlocHist[HIST_N];
+uint8_t  gpsHist[HIST_N], gloHist[HIST_N], bdsHist[HIST_N];
 int      histLen = 0;
 uint32_t lastHistMs = 0;
 
@@ -762,7 +764,7 @@ void drawDetail() {
   auto row = [&](const char* s){ spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString(s, 8, y); y += 24; };
   snprintf(l, sizeof(l), "In view: %d  (pos %d)", countInView(), countPositioned()); row(l);
   snprintf(l, sizeof(l), "GPS %d GLO %d", countConstel(C_GPS), countConstel(C_GLO)); row(l);
-  snprintf(l, sizeof(l), "GAL %d BDS %d", countConstel(C_GAL), countConstel(C_BDS)); row(l);
+  snprintf(l, sizeof(l), "BDS %d QZS %d", countConstel(C_BDS), countConstel(C_QZS)); row(l);
   snprintf(l, sizeof(l), "Used: %d  %s",
            gps.satellites.isValid()?(int)gps.satellites.value():0, fixStr()); row(l);
   snprintf(l, sizeof(l), "HDOP: %.1f  SNR %d", gps.hdop.isValid()?gps.hdop.hdop():0.0, strongestSnr()); row(l);
@@ -792,10 +794,17 @@ void pollButtons() {
 
 void pushHist(int v, int u) {
   if (v > 255) v = 255; if (u > 255) u = 255;
-  if (histLen < HIST_N) { viewHist[histLen] = (uint8_t)v; unlocHist[histLen] = (uint8_t)u; histLen++; }
-  else {
-    for (int i = 1; i < HIST_N; i++) { viewHist[i-1] = viewHist[i]; unlocHist[i-1] = unlocHist[i]; }
+  uint8_t gp = countConstel(C_GPS), gl = countConstel(C_GLO), bd = countConstel(C_BDS);
+  if (histLen < HIST_N) {
+    viewHist[histLen] = (uint8_t)v; unlocHist[histLen] = (uint8_t)u;
+    gpsHist[histLen] = gp; gloHist[histLen] = gl; bdsHist[histLen] = bd;
+    histLen++;
+  } else {
+    memmove(viewHist, viewHist+1, HIST_N-1); memmove(unlocHist, unlocHist+1, HIST_N-1);
+    memmove(gpsHist, gpsHist+1, HIST_N-1); memmove(gloHist, gloHist+1, HIST_N-1);
+    memmove(bdsHist, bdsHist+1, HIST_N-1);
     viewHist[HIST_N-1] = (uint8_t)v; unlocHist[HIST_N-1] = (uint8_t)u;
+    gpsHist[HIST_N-1] = gp; gloHist[HIST_N-1] = gl; bdsHist[HIST_N-1] = bd;
   }
 }
 
@@ -803,8 +812,10 @@ void drawChart() {
   spr.fillRect(0, 20, 320, 220, TFT_BLACK);
   const int X = 22, Y = 46, W = 288, H = 158;
   spr.setTextSize(1);
-  spr.setTextColor(TFT_GREEN, TFT_BLACK);     spr.drawString("in view", X, 26);
-  spr.setTextColor(TFT_ORANGE, TFT_BLACK);    spr.drawString("unlocated", X + 66, 26);
+  spr.setTextColor(TFT_GREEN, TFT_BLACK);     spr.drawString("GPS", X, 26);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);      spr.drawString("GLO", X + 28, 26);
+  spr.setTextColor(TFT_MAGENTA, TFT_BLACK);   spr.drawString("BDS", X + 56, 26);
+  spr.setTextColor(TFT_ORANGE, TFT_BLACK);    spr.drawString("unloc", X + 84, 26);
   spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString("(24 h)", X + 150, 26);
   spr.drawRect(X, Y, W, H, TFT_DARKGREY);
   int mx = 12;
@@ -813,28 +824,31 @@ void drawChart() {
   spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   spr.drawString(lbl, 2, Y - 3);
   spr.drawString("0", 12, Y + H - 6);
-  // mid-level gridline + value label, so any point's magnitude is readable
   int midv = mx / 2;
   int ymid = Y + H - 1 - (int)((long)(H - 2) * midv / mx);
   for (int gx = X + 2; gx < X + W - 2; gx += 8) spr.drawPixel(gx, ymid, TFT_DARKGREY);
   snprintf(lbl, sizeof(lbl), "%d", midv);
   spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   spr.drawString(lbl, 2, ymid - 3);
-  // the two series
-  int pvx = -1, pvy = 0, pux = -1, puy = 0;
+  // per-constellation + unlocated series
+  int pgx = -1, pgy = 0, plx = -1, ply = 0, pbx = -1, pby = 0, pux = -1, puy = 0;
   for (int i = 0; i < histLen; i++) {
     int x  = X + (histLen <= 1 ? 0 : (int)((long)(W - 2) * i / (histLen - 1)));
-    int yv = Y + H - 1 - (int)((long)(H - 2) * viewHist[i] / mx);
+    int yg = Y + H - 1 - (int)((long)(H - 2) * gpsHist[i] / mx);
+    int yl = Y + H - 1 - (int)((long)(H - 2) * gloHist[i] / mx);
+    int yb = Y + H - 1 - (int)((long)(H - 2) * bdsHist[i] / mx);
     int yu = Y + H - 1 - (int)((long)(H - 2) * unlocHist[i] / mx);
-    if (pvx >= 0) spr.drawLine(pvx, pvy, x, yv, TFT_GREEN);
+    if (pgx >= 0) spr.drawLine(pgx, pgy, x, yg, TFT_GREEN);
+    if (plx >= 0) spr.drawLine(plx, ply, x, yl, TFT_CYAN);
+    if (pbx >= 0) spr.drawLine(pbx, pby, x, yb, TFT_MAGENTA);
     if (pux >= 0) spr.drawLine(pux, puy, x, yu, TFT_ORANGE);
-    pvx = x; pvy = yv; pux = x; puy = yu;
+    pgx = x; pgy = yg; plx = x; ply = yl; pbx = x; pby = yb; pux = x; puy = yu;
   }
-  // current value + peak marker with the time it occurred
+  // current values + peak marker
   if (histLen > 0) {
     char info[28];
     snprintf(info, sizeof(info), "now %d", viewHist[histLen - 1]);
-    spr.setTextColor(TFT_GREEN, TFT_BLACK);
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
     spr.drawString(info, X + W - 46, 36);
     int pk = 0;
     for (int i = 1; i < histLen; i++) if (viewHist[i] > viewHist[pk]) pk = i;
@@ -1038,13 +1052,14 @@ void drawObs() {
   spr.setTextColor(TFT_WHITE, TFT_BLACK);
   spr.drawString("24H OBSERVATION", 4, 24);
 
-  static const char* cName[] = {"USA GPS","Russia GLO","EU Galileo","China BDS","Japan QZS"};
-  static const uint8_t cMap[] = {C_GPS, C_GLO, C_GAL, C_BDS, C_QZS};
-  static const uint16_t cCol[] = {TFT_GREEN, TFT_CYAN, TFT_ORANGE, TFT_MAGENTA, TFT_YELLOW};
+  static const char* cName[] = {"USA GPS","Russia GLO","China BDS","Japan QZS"};
+  static const uint8_t cMap[] = {C_GPS, C_GLO, C_BDS, C_QZS};
+  static const uint16_t cCol[] = {TFT_GREEN, TFT_CYAN, TFT_MAGENTA, TFT_YELLOW};
 
+  const int NC = 4;
   struct CS { int idx; float avgVis, avgUsed; uint8_t peak; };
-  CS st[5];
-  for (int i = 0; i < 5; i++) {
+  CS st[NC];
+  for (int i = 0; i < NC; i++) {
     st[i].idx = i;
     int sv = 0, su = 0, pk = 0;
     for (int j = 0; j < cHistLen; j++) {
@@ -1062,8 +1077,8 @@ void drawObs() {
       st[i].peak = countConstel(cMap[i]);
     }
   }
-  for (int i = 0; i < 4; i++)
-    for (int j = i+1; j < 5; j++)
+  for (int i = 0; i < NC - 1; i++)
+    for (int j = i+1; j < NC; j++)
       if (st[j].avgVis > st[i].avgVis) { CS t = st[i]; st[i] = st[j]; st[j] = t; }
 
   auto rDraw = [](int sz, const char* s, int rx, int y) {
@@ -1078,7 +1093,7 @@ void drawObs() {
   rDraw(1, "Used", 308, 50);
 
   int y = 66;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < NC; i++) {
     int ci = st[i].idx;
     spr.setTextSize(2);
     spr.setTextColor(cCol[ci], TFT_BLACK);
@@ -1107,7 +1122,7 @@ void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
     File f = SD.open(LOG_PATH, FILE_APPEND);
-    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather"); f.close(); }
+    if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,beidou,qzss,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather"); f.close(); }
   }
 }
 
@@ -1131,7 +1146,7 @@ void logRow() {
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
-           countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
+           countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
            anomCode, dustRatio, dustConc, bmeTemp, bmeHum, bmePres, wxLabel());
   f.close();
 }
@@ -1231,9 +1246,9 @@ void loop() {
     computeBodies();
     if (bmeOk) bmeRead();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
-    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d GAL=%d BDS=%d | T=%.1f H=%.0f P=%.0f\n",
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d | T=%.1f H=%.0f P=%.0f\n",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
-      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_GAL), countConstel(C_BDS),
+      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
       bmeTemp, bmeHum, bmePres);
   }
 

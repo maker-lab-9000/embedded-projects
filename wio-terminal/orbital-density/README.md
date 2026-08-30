@@ -35,6 +35,12 @@ as extra sensors, pages, and columns.
   mode only: GPS+BeiDou or GPS+GLONASS. The firmware alternates between
   the two modes every 45 seconds so all three constellations appear on
   the display (satellites persist for 120 s across mode switches).
+  Supported constellations: **GPS** (USA), **GLONASS** (Russia),
+  **BeiDou** (China), **QZSS** (Japan, receive-only augmentation —
+  reported as GPS PRNs 193–199, reclassified by the parser). **Galileo
+  is not supported** by this module (no mode, system ID, or command in
+  the AT6558R documentation). QZSS is unlikely to be visible outside
+  the Asia-Oceania region.
 - Grove Dust Sensor (Shinyei PPD42NS), digital pulse output.
 - Seengreat BME280 Environmental Sensor (temperature, humidity, pressure via I2C).
 
@@ -120,7 +126,7 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
 
 - **Sky page** — polar plot: center = zenith, rim = horizon (ring at 30°/60°
   elevation), compass N/E/S/W. Each satellite is a dot **colored by
-  constellation** (GPS green, GLONASS cyan, Galileo orange, BeiDou magenta),
+  constellation** (GPS green, GLONASS cyan, BeiDou magenta, QZSS yellow),
   sized by signal strength. Satellites that are heard but not yet positioned
   (before a fix, or without ephemeris) show as an "N unlocated" count.
   The **Sun, Moon, and five naked-eye planets** (Mercury, Venus, Mars,
@@ -131,11 +137,12 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
 - **Detail page** — numeric: in view (and positioned), per-constellation
   counts, satellites used, fix type, HDOP, strongest SNR, lat/lon, altitude,
   UTC time.
-- **Chart page** — satellites over the last **24 h**: green = in view, orange =
-  unlocated, with UTC **hour markers** (00–23) along the bottom and value
-  gridlines (0 / mid / max) on the left. Shows the current value (`now N`) and
-  a white **peak marker** labelled with the peak value and the UTC time it
-  occurred (`peak N @HH:MM`). Samples once every 5 minutes.
+- **Chart page** — satellites over the last **24 h**, split by constellation:
+  GPS (green), GLONASS (cyan), BeiDou (magenta), unlocated (orange). UTC
+  **hour markers** (00–23) along the bottom, value gridlines (0 / mid / max)
+  on the left. Shows the current total (`now N`) and a white **peak marker**
+  labelled with the peak value and the UTC time it occurred
+  (`peak N @HH:MM`). Samples once every 5 minutes.
 - **Dust page** — `Ratio: X.XX%   N pcs` (LPO ratio and a Shinyei-curve
   concentration estimate, both labelled "relative activity - uncalibrated"),
   plus a 24-hour rolling chart sampled once every 5 minutes. Yellow line,
@@ -149,7 +156,7 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   axis), humidity (green), pressure (yellow, right axis auto-scaled) — with
   UTC hour markers. Sampled every 5 minutes.
 - **Obs page** — 24-hour observation statistics table: per-constellation
-  (GPS, GLONASS, Galileo, BeiDou) rows showing current in-view and used
+  (GPS, GLONASS, BeiDou, QZSS) rows showing current in-view and used
   counts, plus 24-hour peak, average, and minimum values for each. Updated
   every 5 minutes from the rolling history buffer.
 
@@ -170,7 +177,7 @@ in-view satellites whose sky position isn't known yet.
 Logs one row per minute to `/gps.csv` on the microSD:
 
 ```
-utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,galileo,beidou,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather
+utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,beidou,qzss,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather
 ```
 
 `anom` is the reception-anomaly state at that minute (`OK` or a code like
