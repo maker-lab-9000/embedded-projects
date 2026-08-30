@@ -2,7 +2,7 @@
 
 A Wio Terminal that visualizes what's *above* it. **Milestone 1 — GPS sky view:**
 a live polar "radar" of every satellite the Air530 GNSS module can hear
-(GPS + GLONASS + Galileo + BeiDou), colored by constellation, plus a numeric
+(GPS + BeiDou + GLONASS), colored by constellation, plus a numeric
 detail page, a 24-hour satellite-count chart, reception-anomaly alerts, the
 live positions of the **Sun, Moon, and five naked-eye planets** on the sky
 (computed from a low-precision ephemeris using GPS position + UTC), and microSD
@@ -30,7 +30,11 @@ as extra sensors, pages, and columns.
 ## Hardware
 
 - Seeed Wio Terminal (SAMD51).
-- Air530 GNSS module (multi-constellation, NMEA 0183 over UART @ 9600).
+- Air530Z GNSS module (AT6558R chipset, NMEA 0183 over UART @ 115200 baud,
+  configured via `$PCAS` commands). The module supports dual-constellation
+  mode only: GPS+BeiDou or GPS+GLONASS. The firmware alternates between
+  the two modes every 45 seconds so all three constellations appear on
+  the display (satellites persist for 120 s across mode switches).
 - Grove Dust Sensor (Shinyei PPD42NS), digital pulse output.
 - Seengreat BME280 Environmental Sensor (temperature, humidity, pressure via I2C).
 
@@ -41,7 +45,7 @@ The Air530 must connect to the Wio's hardware UART on the **40-pin header**:
 | GPS wire | Wio header pin |
 |----------|----------------|
 | TX       | **pin 10** (BCM15 / RXD / `Serial1` RX) |
-| RX       | **pin 8** (BCM14 / TXD / `Serial1` TX) — used for PGKC config commands |
+| RX       | **pin 8** (BCM14 / TXD / `Serial1` TX) — used for PCAS baud/mode commands |
 | VCC      | pin 1 (3V3) |
 | GND      | pin 6 (GND) |
 

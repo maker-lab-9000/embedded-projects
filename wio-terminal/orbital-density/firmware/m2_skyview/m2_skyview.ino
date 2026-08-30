@@ -45,13 +45,15 @@ enum Constel { C_GPS, C_GLO, C_GAL, C_BDS, C_QZS, C_OTHER };
 struct Sat { uint8_t constel; uint8_t prn; int8_t elev; int16_t azim; uint8_t snr; uint32_t seen; };
 
 const int      MAX_SATS   = 64;
-const uint32_t SAT_TTL_MS = 10000;   // drop a satellite not reported for 10 s
+const uint32_t SAT_TTL_MS = 120000;  // 120 s — survives a full 90 s mode-toggle cycle
 Sat sats[MAX_SATS];
 int satCount = 0;
 
 // ---- NMEA line assembly (for the custom GSV parser) ----
 char line[128];
 int  linePos = 0;
+
+extern uint32_t lastToggleMs;
 
 uint8_t talkerConstel(const char* s) {  // s points at '$'; chars 1..2 = talker
   if (s[1] == 'G' && s[2] == 'P') return C_GPS;
@@ -397,7 +399,7 @@ void computeBodies() {
 // ---------- anomaly (reception health) ----------
 
 void evalAnomaly() {
-  if (gps.location.isValid()) everFixed = true;
+  if (gps.location.isValid() && !everFixed) { everFixed = true; lastToggleMs = millis(); }
   if (!everFixed) { strcpy(anomCode, "OK"); return; }   // no working baseline yet
   const char* code = "OK";
   if (!gps.location.isValid())                                                     code = "FIX LOST";
@@ -1159,9 +1161,17 @@ uint32_t lastPrint = 0;
 
 void setup() {
   Serial.begin(115200);
+  // Air530Z (AT6558R) defaults to 9600; switch to 115200 to avoid
+  // NMEA saturation, then set GPS+BDS mode.  If the module already
+  // persisted 115200 from a previous boot the 9600 command is harmless
+  // garbage — the PCAS04 at 115200 still arrives.
   Serial1.begin(9600);
+  delay(500);
+  Serial1.println("$PCAS01,5*19");   // set module baud → 115200
   delay(200);
-  Serial1.println("$PGKC115,1,1,1,1*2A");
+  Serial1.begin(115200);
+  delay(100);
+  Serial1.println("$PCAS04,3*1A");   // GPS+BDS mode
 
   pinMode(WIO_KEY_C, INPUT_PULLUP);
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
@@ -1187,10 +1197,23 @@ void setup() {
   dustFallAtUs = micros();
 }
 
+// Constellation mode toggle: alternate GPS+BDS / GPS+GLONASS every 45s
+// so all three constellations appear on the display.
+const uint32_t MODE_TOGGLE_MS = 45000;
+uint32_t lastToggleMs = 0;   // set to millis() when everFixed first becomes true
+bool gnssModeBds = true;  // true = GPS+BDS, false = GPS+GLONASS
+
 void loop() {
   feedGps();
-  pollButtons();  // poll every loop so presses feel instant
-  pollDust();     // non-blocking; must run every loop iteration
+  pollButtons();
+  pollDust();
+
+  if (everFixed && millis() - lastToggleMs >= MODE_TOGGLE_MS) {
+    lastToggleMs = millis();
+    gnssModeBds = !gnssModeBds;
+    if (gnssModeBds) Serial1.println("$PCAS04,3*1A");
+    else             Serial1.println("$PCAS04,5*1C");
+  }
 
   if (millis() - lastHistMs >= HIST_PERIOD_MS) {
     lastHistMs = millis();
