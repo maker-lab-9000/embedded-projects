@@ -281,12 +281,11 @@ void computeBodies() {
   double GMST0 = revd(Ls+180.0);
   double LST = revd(GMST0 + UT*15.0 + lon);
 
-  // Sun RA/Dec (geocentric = opposite of Earth's helio position)
+  // Sun RA/Dec — xs,ys are already the Sun's geocentric ecliptic coords
   {
-    double xsG = -xs, ysG = -ys;
-    double ye = ysG*cos(ecl*R2), ze = ysG*sin(ecl*R2);
-    double RA = revd(atan2(ye, xsG)/R2);
-    double Dec = atan2(ze, sqrt(xsG*xsG+ye*ye))/R2;
+    double ye = ys*cos(ecl*R2), ze = ys*sin(ecl*R2);
+    double RA = revd(atan2(ye, xs)/R2);
+    double Dec = atan2(ze, sqrt(xs*xs+ye*ye))/R2;
     raDecToAltAz(RA, Dec, LST, lat, bodies[B_SUN].alt, bodies[B_SUN].az);
     bodies[B_SUN].valid = true;
   }
