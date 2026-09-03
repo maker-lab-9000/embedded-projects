@@ -1147,24 +1147,34 @@ void drawObs() {
 }
 
 // ---------- observation log (/obs.csv, one row per second) ----------
-// Separate from /gps.csv (60 s, legacy schema). File stays open; flushed every 10 s so a
-// 1 Hz cadence costs one buffered print per second, not an open/close on the card.
-// OBS_EVERY_N = 1 logs every second; raise it (e.g. 10) to log every N seconds.
+// Separate from /gps.csv (60 s, legacy schema). Rows are formatted every second into a RAM
+// batch and written with ONE open/append/close every OBS_BATCH_MS — the same pattern
+// /gps.csv has used reliably. Keeping a File open across seconds and relying on flush() was
+// tried first (2026-09-03) and the file never appeared on the card after a power-off.
+// A power cut loses at most one batch. OBS_EVERY_N = 1 logs every second; raise it to
+// log every N seconds.
 const char*    OBS_PATH     = "/obs.csv";
 const int      OBS_EVERY_N  = 1;
-const uint32_t OBS_FLUSH_MS = 10000;
-File     obsFile;
-bool     obsOpen = false;
-uint32_t lastObsFlushMs = 0;
+const uint32_t OBS_BATCH_MS = 10000;
+char     obsBatch[2048];               // ~10 rows of ~180 bytes
+size_t   obsBatchLen = 0;
+uint16_t obsRowsBuffered = 0;
+uint32_t lastObsWriteMs = 0;
 uint32_t obsRowsWritten = 0, obsWriteErrors = 0;
+
+// GNSS date+time as ISO-8601, or "" if not (yet) trustworthy. TinyGPS++ marks the date valid
+// as soon as an RMC sentence parses, even with an empty date field (seen as "2000-00-00").
+void gnssUtc(char* out, size_t n) {
+  if (gps.date.isValid() && gps.time.isValid() && gps.date.year() >= 2020)
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             gps.date.year(), gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  else out[0] = 0;
+}
 
 void assembleObservation() {
   obs.uptimeS = millis() / 1000;
-  if (gps.date.isValid() && gps.time.isValid())
-    snprintf(obs.utc, sizeof(obs.utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-             gps.date.year(), gps.date.month(), gps.date.day(),
-             gps.time.hour(), gps.time.minute(), gps.time.second());
-  else obs.utc[0] = 0;
+  gnssUtc(obs.utc, sizeof(obs.utc));
   obs.fixValid = gps.location.isValid();
   obs.lat  = obs.fixValid ? gps.location.lat() : 0.0;
   obs.lon  = obs.fixValid ? gps.location.lng() : 0.0;
@@ -1186,30 +1196,40 @@ void assembleObservation() {
   obs.loopMaxMs = (uint16_t)loopMaxMsLast;
 }
 
-bool obsOpenFile() {
-  if (!sdOk) return false;
+// Write the RAM batch to the card: open, (header if new), write, close.
+void obsFlushToCard() {
+  lastObsWriteMs = millis();
+  if (obsBatchLen == 0) return;
+  if (!sdOk) return;                          // keep buffering; logRow() re-inits the card
   bool isNew = !SD.exists(OBS_PATH);
-  obsFile = SD.open(OBS_PATH, FILE_APPEND);
-  if (!obsFile) return false;
-  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) obsFile.print(h); }
-  lastObsFlushMs = millis();
-  obsOpen = true;
-  return true;
+  File f = SD.open(OBS_PATH, FILE_APPEND);
+  if (!f) { obsWriteErrors++; sdOk = false; return; }
+  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) f.print(h); }
+  size_t w = f.write((const uint8_t*)obsBatch, obsBatchLen);
+  f.close();
+  if (w == obsBatchLen) obsRowsWritten += obsRowsBuffered; else obsWriteErrors++;
+  obsBatchLen = 0; obsRowsBuffered = 0;
 }
 
 void logObs() {
-  if (!sdOk) { if (obsOpen) { obsFile.close(); obsOpen = false; } return; }   // logRow() re-inits the card
-  if (!obsOpen && !obsOpenFile()) return;
   char row[512];
   if (!obsRow(obs, row, sizeof(row))) return;
-  if (obsFile.print(row) == 0) { obsWriteErrors++; obsFile.close(); obsOpen = false; return; }
-  obsRowsWritten++;
-  if (millis() - lastObsFlushMs >= OBS_FLUSH_MS) { lastObsFlushMs = millis(); obsFile.flush(); }
+  size_t n = strlen(row);
+  if (obsBatchLen + n >= sizeof(obsBatch)) obsFlushToCard();     // batch full: write early
+  if (obsBatchLen + n < sizeof(obsBatch)) {
+    memcpy(obsBatch + obsBatchLen, row, n); obsBatchLen += n; obsRowsBuffered++;
+  }
+  if (millis() - lastObsWriteMs >= OBS_BATCH_MS) obsFlushToCard();
 }
 
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
-  if (sdOk && !SD.exists(LOG_PATH)) {
+  bool needHeader = false;
+  if (sdOk) {
+    if (!SD.exists(LOG_PATH)) needHeader = true;
+    else { File t = SD.open(LOG_PATH, FILE_READ); needHeader = (t && t.size() == 0); if (t) t.close(); }
+  }
+  if (needHeader) {   // missing or empty file (seen after a card repair): (re)write the header
     File f = SD.open(LOG_PATH, FILE_APPEND);
     if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,beidou,qzss,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather"); f.close(); }
   }
@@ -1225,11 +1245,8 @@ void logRow() {
   if (!sdOk) { initSd(); if (!sdOk) return; }
   File f = SD.open(LOG_PATH, FILE_APPEND);
   if (!f) { sdOk = false; return; }
-  char utc[24] = "";
-  if (gps.date.isValid() && gps.time.isValid())
-    snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-             gps.date.year(), gps.date.month(), gps.date.day(),
-             gps.time.hour(), gps.time.minute(), gps.time.second());
+  char utc[24];
+  gnssUtc(utc, sizeof(utc));
   char dustR[12] = "", dustC[12] = "";
 #if DUST_ENABLED
   snprintf(dustR, sizeof(dustR), "%.2f", dustRatio);
@@ -1249,6 +1266,8 @@ void logRow() {
   f.close();
 }
 
+#include "pages_sensors.h"     // SkySens / Mag / Sensors pages (needs spr, gps, sensors, obs stats)
+
 // ---------- page table ----------
 // Add a page = add one row. Navigation: KEY_C and 5-way RIGHT go forward, 5-way LEFT back.
 typedef void (*PageFn)();
@@ -1262,6 +1281,9 @@ const PageDef PAGES[] = {
 #endif
   {"Env",    drawEnv},
   {"Obs",    drawObs},
+  {"SkySens", drawSkySensors},
+  {"Mag",     drawMag},
+  {"Sensors", drawSensors},
 };
 int pageCount() { return (int)(sizeof(PAGES) / sizeof(PAGES[0])); }
 
