@@ -1,0 +1,5 @@
+# ESPHome build cache and per-machine secrets
+.esphome/
+esphome/secrets.yaml
+*.bin
+.DS_Store
