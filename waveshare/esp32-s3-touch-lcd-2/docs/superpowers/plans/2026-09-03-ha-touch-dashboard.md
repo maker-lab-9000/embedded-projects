@@ -928,7 +928,7 @@ git commit -m "waveshare: Storage page with disk usage, temperatures, NVMe wear,
 - Consumes: `backlight`, `touch`, `lvgl`.
 - Produces: HA sensor `Battery Voltage`; idle behaviour.
 
-- [ ] **Step 1: Idle and wake**
+- [x] **Step 1: Idle and wake**
 
 Under `lvgl:` add:
 
@@ -954,7 +954,7 @@ Replace the touchscreen `on_touch` logging with:
                 brightness: 100%
 ```
 
-- [ ] **Step 2: Battery voltage**
+- [x] **Step 2: Battery voltage**
 
 Append to `sensor:`:
 
