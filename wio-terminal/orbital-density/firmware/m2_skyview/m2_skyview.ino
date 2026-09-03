@@ -22,6 +22,8 @@
 #include "SD/Seeed_SD.h"
 #include <Wire.h>
 #include <SparkFunBQ27441.h>   // fuel gauge on the 650 mAh battery chassis
+#include "loopstats.h"         // loop max-time + iteration counters (see Sensors page / status line)
+#include "i2c_bus.h"           // 100 kHz clock constant, presence probe, boot scan
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -1193,6 +1195,8 @@ void setup() {
   digitalWrite(LCD_BACKLIGHT, HIGH);
 
   Wire.begin();                 // fuel gauge is optional (battery chassis only)
+  Wire.setClock(I2C_CLOCK_HZ);  // MLX90614 is SMBus: 100 kHz max for the whole hub
+  i2cScan();                    // echo what answered; shown on the Sensors page
   batOk = lipo.begin();
   if (batOk) lipo.setCapacity(650);
   bmeOk = bmeInit();
@@ -1218,6 +1222,7 @@ uint32_t lastToggleMs = 0;   // set to millis() when everFixed first becomes tru
 bool gnssModeBds = true;  // true = GPS+BDS, false = GPS+GLONASS
 
 void loop() {
+  loopStatsTick();
   feedGps();
   pollButtons();
   pollDust();
@@ -1240,15 +1245,22 @@ void loop() {
 
   if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
+    loopStatsRoll();
     expireSats();
     evalAnomaly();
     computeBodies();
     if (bmeOk) bmeRead();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
-    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d | T=%.1f H=%.0f P=%.0f\n",
+    // Status line. NOTE: this core's Serial.printf() truncates at ~80 chars, so the line is
+    // built from several printf calls; each sensor module appends its own segment.
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
-      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
-      bmeTemp, bmeHum, bmePres);
+      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS));
+    Serial.printf(" | T=%.1f H=%.0f P=%.0f", bmeTemp, bmeHum, bmePres);
+    Serial.printf(" | loopMax=%lums iter=%lu nmeaPass=%lu nmeaFail=%lu",
+      (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast,
+      (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
+    Serial.println();
   }
 
   if (millis() - lastLogMs >= LOG_PERIOD_MS) {

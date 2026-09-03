@@ -20,6 +20,7 @@
 - Never put a UART on the right Grove port (D0/D1): SERCOM4's interrupt handlers belong to `Wire1` in the core, TX would land on the wrong Grove pin, and the pins default to the analog mux.
 - Loop budget: the UART RX buffer is 256 bytes (~22 ms at 115200 baud). No new code may block. Regression metric: `gps.failedChecksum()` growth per 5 min must not exceed the Task 5 baseline; `loopMaxMs` is displayed for diagnosis.
 - Existing behaviour of GPS parsing, sky plot, existing charts and `/gps.csv` is preserved. Edits to `m2_skyview.ino` are limited to: includes, `#define DUST_ENABLED`, `setup()`, `loop()`, `pollButtons()`, `drawPage()`, `logRow()` dust fields, and the new observation-log block.
+- `Serial.printf()` on this core truncates at about 80 characters: keep each call short and build long lines from several calls.
 - Style: two-space indent, `camelCase` functions/variables, `UPPER_SNAKE` constants, hardware assumptions in comments next to the code (see `AGENTS.md`).
 - Hardware steps (plugging cables, uploading, reading the screen, pulling the SD card) are the user's. At every **Hardware checkpoint** stop, tell the user exactly what to do and what to expect, and wait.
 - Commit after every task with an imperative subject prefixed `orbital-density:` (docs: `orbital-density docs:`). Do **not** push unless the user asks.
@@ -618,7 +619,7 @@ git commit -m "orbital-density: add MLX90614 thermal sky bring-up sketch"
 **Interfaces:**
 - Produces: `void loopStatsTick();` (every iteration), `void loopStatsRoll();` (once per second), `uint32_t loopMaxMsLast, loopIterLast;` used by Task 10 (`Observation.loopMaxMs`) and Task 12 (Sensors page). Regression metric: `gps.failedChecksum()` (TinyGPS++ built-in).
 
-- [ ] **Step 1: Write `loopstats.h`**
+- [x] **Step 1: Write `loopstats.h`**
 
 ```cpp
 // loopstats.h — loop-timing counters: the regression metric for every sensor added to loop().
@@ -647,7 +648,7 @@ inline void loopStatsRoll() {
 }
 ```
 
-- [ ] **Step 2: Include it and hook the loop**
+- [x] **Step 2: Include it and hook the loop**
 
 In `m2_skyview.ino`, after line 24 (`#include <SparkFunBQ27441.h>   // fuel gauge ...`) add:
 
@@ -658,15 +659,21 @@ In `m2_skyview.ino`, after line 24 (`#include <SparkFunBQ27441.h>   // fuel gaug
 In `loop()`: make `loopStatsTick();` the first statement (before `feedGps();`). In the 1 Hz block (`if (millis() - lastPrint >= 1000) {`), insert `loopStatsRoll();` immediately after `lastPrint = millis();`, and replace the status `Serial.printf(...)` with:
 
 ```cpp
-    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d | T=%.1f H=%.0f P=%.0f | loopMax=%lums iter=%lu nmeaPass=%lu nmeaFail=%lu\n",
+    // Status line. NOTE: this core's Serial.printf() truncates at ~80 chars, so the line is
+    // built from several printf calls; each sensor module appends its own segment.
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
-      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
-      bmeTemp, bmeHum, bmePres,
+      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS));
+    Serial.printf(" | T=%.1f H=%.0f P=%.0f", bmeTemp, bmeHum, bmePres);
+    Serial.printf(" | loopMax=%lums iter=%lu nmeaPass=%lu nmeaFail=%lu",
       (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast,
       (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
+    Serial.println();
 ```
 
-- [ ] **Step 3: Compile**
+(The single long `printf` was tried first and lost everything after ~80 characters.)
+
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
@@ -713,7 +720,7 @@ git commit -m "orbital-density: add loop timing counters and record NMEA baselin
 **Interfaces:**
 - Produces: `const uint32_t I2C_CLOCK_HZ, I2C_REPROBE_MS;` `bool i2cPresent(uint8_t);` `void i2cScan();` `uint8_t i2cFound[16], i2cFoundCount;` used by Tasks 7–9 (re-probe cadence) and Task 12 (Sensors page).
 
-- [ ] **Step 1: Write `i2c_bus.h`**
+- [x] **Step 1: Write `i2c_bus.h`**
 
 ```cpp
 // i2c_bus.h — shared helpers for the sensor hub on the LEFT Grove port (Wire = SERCOM3, PA16/PA17).
@@ -745,7 +752,7 @@ void i2cScan() {
 }
 ```
 
-- [ ] **Step 2: Wire it into the sketch**
+- [x] **Step 2: Wire it into the sketch**
 
 Add after the `loopstats.h` include:
 
@@ -767,13 +774,13 @@ with
   i2cScan();                    // echo what answered; shown on the Sensors page
 ```
 
-- [ ] **Step 3: Compile, upload, confirm**
+- [x] **Step 3: Compile, upload, confirm**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
 ```
 
-Hardware checkpoint (user): the first serial line after reset reads `I2C scan: 0x29 0x30 0x55 0x5A 0x77 (5 devices)` (without `0x55` if no battery chassis). BME280 page still shows readings.
+Hardware checkpoint (user): the first serial line after reset reads `I2C scan: 0x29 0x30 0x55 0x77 (4 devices)` (`0x5A` joins once the GY-906 is in). In practice the boot line is not observable over native USB (the host has not reopened the port yet), so the Sensors page (Task 12) is where the scan result is checked; the BME280 page still showing readings is the interim check. Result 2026-09-03: compiled, BME280 22.0 °C / 54 % / 1005 hPa on the hub.
 
 - [ ] **Step 4: Commit**
 
@@ -833,7 +840,7 @@ In `loop()`, right after `pollDust();` add:
   }
 ```
 
-Extend the status `Serial.printf` format with ` | tsl full=%u ir=%u %s/%ums lux=%.3f` and arguments `tslFull, tslIr, tslGainName(), tslIntegMs, tslLux` (append after the `gps.failedChecksum()` argument).
+Add a status-line segment before the `Serial.println();` in the 1 Hz block: `Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);`.
 
 - [ ] **Step 3: Compile**
 
@@ -990,7 +997,7 @@ Add after the `tsl2591.h` include:
   magInit();                    // magnetometer (0x30); re-probed every 30 s if absent
 ```
 
-`loop()`: after `tslPoll();` add `magPoll();`. In the re-probe block add `if (!magOk) magInit();`. In the 5-min `HIST_PERIOD_MS` block, after `pushConstelHist();` add `magPushHist();`. In the 1 Hz block, after `if (bmeOk) bmeRead();` add `magRollSecond();`. Extend the status line with ` | mag |B|=%.1f hdg=%.0f` and arguments `magMeanTotal, magMeanHeading`.
+`loop()`: after `tslPoll();` add `magPoll();`. In the re-probe block add `if (!magOk) magInit();`. In the 5-min `HIST_PERIOD_MS` block, after `pushConstelHist();` add `magPushHist();`. In the 1 Hz block, after `if (bmeOk) bmeRead();` add `magRollSecond();`. Add a status-line segment before the `Serial.println();`: `Serial.printf(" | mag |B|=%.1f hdg=%.0f", magMeanTotal, magMeanHeading);`.
 
 - [ ] **Step 4: Compile**
 
@@ -1291,7 +1298,7 @@ In the 1 Hz block of `loop()`, after `magRollSecond();` add:
     if (++obsTick >= OBS_EVERY_N) { obsTick = 0; logObs(); }
 ```
 
-(Keep `if (screenOn) drawPage();` after these lines.) Extend the status line with ` | obs rows=%lu err=%lu` and `(unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors`.
+(Keep `if (screenOn) drawPage();` after these lines.) Add a status-line segment before the `Serial.println();`: `Serial.printf(" | obs rows=%lu err=%lu", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors);`.
 
 - [ ] **Step 3: Compile**
 
