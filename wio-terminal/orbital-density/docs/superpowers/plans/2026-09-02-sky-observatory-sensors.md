@@ -679,7 +679,7 @@ In `loop()`: make `loopStatsTick();` the first statement (before `feedGps();`). 
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
 ```
 
-- [ ] **Step 4: Hardware checkpoint (user) — record the baseline**
+- [x] **Step 4: Hardware checkpoint (user) — record the baseline**
 
 Upload with the hub connected (sensors plugged in but not yet used by the firmware), GPS with a fix. Let it run 5 minutes with the screen on, then read the last status line and one from 5 minutes earlier. Ask the user for: typical `loopMax` (screen on), `nmeaPass` and `nmeaFail` at both times.
 
@@ -702,7 +702,9 @@ tens of ms per second will show here first. Fallback if needed: build with
 
 Fill in the numbers the user reports.
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03 (5 min, screen on, 3D fix): loopMax median 138 ms / max 151 ms; ~234k iterations/s; NMEA pass 7.4/s; **fail 111 per 5 min (0.37/s, ~5 %)** — the pre-existing sprite-blit/ephemeris stall already costs sentences. Regression gate for later tasks: fail rate ≤ ~0.4/s.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m2_skyview/loopstats.h wio-terminal/orbital-density/firmware/m2_skyview/m2_skyview.ino wio-terminal/orbital-density/README.md

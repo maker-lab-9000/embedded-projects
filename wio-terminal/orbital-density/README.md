@@ -160,6 +160,23 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   counts, plus 24-hour peak, average, and minimum values for each. Updated
   every 5 minutes from the rolling history buffer.
 
+### Loop timing baseline (commit 3438f12, hub + chassis attached, no new drivers)
+
+Measured 2026-09-03 over 5 minutes with the screen on and a 3D fix, via the 1 Hz status line:
+
+| metric | value |
+|---|---|
+| loopMax, screen on (median / max) | 138 ms / 151 ms |
+| loop iterations per second (median) | ~234 000 |
+| NMEA sentences passed | 7.4 per second |
+| NMEA checksum failures | 111 per 5 min (≈0.37 per second, ≈5 % of sentences) |
+
+The 1 Hz block (77 KB sprite blit + double-precision ephemeris) is the ~138 ms stall, and it
+already costs about 5 % of NMEA sentences when it overlaps the module's once-a-second burst
+(the UART RX buffer is 256 bytes, ~22 ms at 115200 baud). Every sensor task is accepted only
+if the failed-checksum rate stays within this baseline. Fallback if it does not: build with
+`--build-property "compiler.cpp.extra_flags=-DSERIAL_BUFFER_SIZE=1024"`.
+
 ### Reception anomaly detection
 
 Once a fix has been established, a red banner flags reception-health problems:
