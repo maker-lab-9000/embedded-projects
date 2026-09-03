@@ -2072,6 +2072,68 @@ git commit -m "orbital-density: Sky page heading marker and heading-up mode from
 
 ---
 
+### Task 16: Visible + near-IR light chart on the SkySens page
+
+Added 2026-09-03 at the user's request after Task 15.
+
+**Files:**
+- Modify: `wio-terminal/orbital-density/firmware/m2_skyview/m2_skyview.ino` — history rings + `tslPushHist()` after the `DUST_ENABLED` define; `tslPushHist();` in the 5-min block
+- Modify: `wio-terminal/orbital-density/firmware/m2_skyview/pages_sensors.h` — `drawSeriesLog2()`; chart section of `drawSkySensors()`
+- Modify: `wio-terminal/orbital-density/README.md` — SkySens bullet
+
+**Interfaces:**
+- Consumes: `Ring`, `SENSOR_HIST_N` (Task 8), `tslOk/tslSat/tslFull/tslIr/tslIntegMs/tslGainIdx/TSL_GAIN_X` (Task 2/7), `drawSeries()` (Task 12).
+- Produces: `Ring<int16_t,288> tslVisHist, tslIrHist;` `int16_t tslLogNorm(uint16_t counts);` `void tslPushHist();` `void drawSeriesLog2(const int16_t* a, const int16_t* b, int len, int X, int Y, int W, int H, uint16_t colA, const char* nameA, uint16_t colB, const char* nameB);`
+
+**Design:** one shared log axis (no dual axes). Each channel is stored as `log10(counts / (integ_ms × gain)) × 100` — a gain-independent rate proportional to irradiance — so auto-range steps do not show as jumps and daylight to dark sky fits one axis. Saturated samples are skipped. Colours: visible `TFT_CYAN`, near-IR `TFT_ORANGE` (dataviz validator: CVD ΔE 23 deutan / 31 normal, contrast ≥ 3:1 on black; the "lightness band" check is a UI-palette rule that does not apply to this TFT). Legend swatches top-left, axis labels as real magnitudes (`%.2g`), dotted decade gridlines, UTC hour markers.
+
+- [x] **Step 1: History + push**
+
+After `#define DUST_ENABLED 0` in `m2_skyview.ino`:
+
+```cpp
+// ---------- TSL2591 24 h history (Task 16) ----------
+Ring<int16_t, SENSOR_HIST_N> tslVisHist, tslIrHist;
+
+int16_t tslLogNorm(uint16_t counts) {
+  float norm = (float)counts / ((float)tslIntegMs * TSL_GAIN_X[tslGainIdx]);
+  if (norm < 1e-6f) norm = 1e-6f;
+  return (int16_t)lroundf(log10f(norm) * 100.0f);
+}
+
+void tslPushHist() {
+  if (!tslOk || tslSat) return;
+  uint16_t vis = tslFull >= tslIr ? tslFull - tslIr : 0;
+  tslVisHist.push(tslLogNorm(vis));
+  tslIrHist.push(tslLogNorm(tslIr));
+}
+```
+
+and `tslPushHist();` after `magPushHist();` in the 5-minute block.
+
+- [x] **Step 2: Chart helper and SkySens layout**
+
+`drawSeriesLog2()` in `pages_sensors.h` (above the condition-label block) and the chart section of `drawSkySensors()` replaced so the light chart takes the space under the Condition line (`avail - 12` px, ~68 px today); with `MLX_ENABLED` the light and thermal charts split the space when both fit at ≥ 24 px, otherwise light wins. See the file for the exact code.
+
+- [x] **Step 3: Compile**
+
+- [ ] **Step 4: Hardware checkpoint (user)**
+
+SkySens page: below Condition, a framed chart titled "sky light, 24 h" with `vis`/`IR` swatches and "collecting (1 sample / 5 min)". After 10 minutes two lines appear (cyan above orange indoors; IR fraction ~35 %), axis labels like `3.7` / `0.37`. Dim the room or cover the sensor across a 5-minute boundary and both lines dip together with no step at gain changes.
+
+Status 2026-09-03: compiled and flashed; visual confirmation of the drawn lines (needs 10 min of samples) still pending from the user.
+
+- [x] **Step 5: README + commit**
+
+README SkySens bullet: add the chart description.
+
+```bash
+git add wio-terminal/orbital-density/firmware/m2_skyview wio-terminal/orbital-density/README.md wio-terminal/orbital-density/docs/superpowers
+git commit -m "orbital-density: 24 h visible + near-IR light chart on the SkySens page"
+```
+
+---
+
 ## Self-review notes
 
 - Spec §2 (wiring/parts/addresses) → Task 1 + Task 13. §3 (blocking constraints) → Tasks 2, 3, 5, 9 gate. §4.1–4.2 (files, module contract) → Tasks 5–9. §4.3–4.4 (Observation, column table) → Task 10. §4.5 (page table, 5-way) → Task 11. §4.6 (dust gate) → Task 11. §5 drivers → Tasks 2/7, 8, 9. §6 display → Task 12. §7 metric → Task 5. §8 logging → Task 10. §9 bring-up → Tasks 1–4. §10 verification → each task's checkpoint. §11 calibration → Task 14. §12 docs → Task 13.

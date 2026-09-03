@@ -36,6 +36,26 @@
 // Dust page and its history; /gps.csv keeps its columns with empty dust fields.
 #define DUST_ENABLED 0
 
+// ---------- TSL2591 24 h history (Task 16) ----------
+// One sample / 5 min. Each channel is stored as log10 of its gain/integration-normalised rate
+// (counts per ms at 1x gain) x100 in an int16: comparable across auto-range steps and spanning
+// daylight to dark sky on one axis. Saturated samples are skipped so a torch or direct sun
+// does not paint a false plateau.
+Ring<int16_t, SENSOR_HIST_N> tslVisHist, tslIrHist;
+
+int16_t tslLogNorm(uint16_t counts) {
+  float norm = (float)counts / ((float)tslIntegMs * TSL_GAIN_X[tslGainIdx]);
+  if (norm < 1e-6f) norm = 1e-6f;
+  return (int16_t)lroundf(log10f(norm) * 100.0f);
+}
+
+void tslPushHist() {
+  if (!tslOk || tslSat) return;
+  uint16_t vis = tslFull >= tslIr ? tslFull - tslIr : 0;
+  tslVisHist.push(tslLogNorm(vis));
+  tslIrHist.push(tslLogNorm(tslIr));
+}
+
 TinyGPSPlus gps;
 TFT_eSPI tft;
 TFT_eSprite spr = TFT_eSprite(&tft);   // off-screen buffer: draw here, blit once (no flicker)
@@ -1424,6 +1444,7 @@ void loop() {
 #endif
     pushConstelHist();
     magPushHist();
+    tslPushHist();
     if (bmeOk) { pushEnvHist(); evalWeather(); }
   }
 

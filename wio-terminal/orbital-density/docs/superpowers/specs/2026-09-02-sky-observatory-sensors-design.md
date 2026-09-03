@@ -308,7 +308,7 @@ Three new pages, drawn into the existing 8-bit sprite with the existing
 int y0, int h, float scale, uint16_t colour)` helper draws the 24 h lines for
 the new pages; the three existing chart renderers are not touched.
 
-- **SkySens:** visible lux (or raw counts with gain when lux is NAN), IR fraction %, sky IR °C, Δ sky °C, TSL gain/integration, and a "Condition" line that reads `CLEAR / CLOUDY / --` from a placeholder threshold on Δ sky that is explicitly marked provisional until Phase 5 data exists.
+- **SkySens:** visible lux (or raw counts with gain when lux is NAN), IR fraction %, sky IR °C, Δ sky °C, TSL gain/integration, a 24 h two-line chart of visible and near-IR as log10 gain-normalised count rates on one axis (Task 16, added 2026-09-03), and a "Condition" line that reads `CLEAR / CLOUDY / --` from a placeholder threshold on Δ sky that is explicitly marked provisional until Phase 5 data exists.
 - **Mag:** Bx By Bz in µT, |B|, heading, plus the 24 h |B| chart.
 - **Sky (existing page, Task 15):** an orange wedge on the ring marks the device's magnetic heading with a `Hdg NNN mag` readout; 5-way up switches to heading-up, rotating satellites, bodies and the N/E/S/W letters by −heading. Raw magnetic heading until the Task 14 constants are set.
 - **Sensors:** one row per I²C device: address, name, OK/missing, last-sample age; last boot scan result; `loopMax ms` and `nmeaBad` counters from §7.

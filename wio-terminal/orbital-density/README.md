@@ -259,7 +259,9 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   every 5 minutes from the rolling history buffer.
 - **SkySens page** — TSL2591 optical sky: visible lux (or raw counts when saturated or
   dark), near-IR fraction, raw full/IR counts with the gain and integration time that produced
-  them (auto-ranged between 1× / 100 ms and 9876× / 600 ms). Thermal rows read "Sky IR not
+  them (auto-ranged between 1× / 100 ms and 9876× / 600 ms). Below: a **24 h chart of visible
+  (cyan) and near-IR (orange)** as gain-normalised count rates on one log axis, sampled every
+  5 minutes, so auto-range steps do not show as jumps. Thermal rows read "Sky IR not
   installed" and Condition `--` until the MLX90614 is enabled; then Sky IR °C, Δ sky and a
   provisional CLEAR?/MIXED?/CLOUDY? label with a 24 h Δ chart.
 - **Mag page** — MMC5603: |B| in µT, heading (level assumed, no tilt compensation), X/Y/Z

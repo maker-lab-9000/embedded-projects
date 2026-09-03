@@ -36,6 +36,54 @@ void drawSeries(const int16_t* v, int len, int X, int Y, int W, int H, int minSp
   }
 }
 
+// Two-series 24 h chart of log10(value)x100 rings on ONE shared axis (never dual axes).
+// Auto-scaled with a minimum span of one decade, dotted decade gridlines, axis labels as real
+// magnitudes (%.2g), legend swatches top-left. Same hour markers as drawSeries().
+void drawSeriesLog2(const int16_t* a, const int16_t* b, int len, int X, int Y, int W, int H,
+                    uint16_t colA, const char* nameA, uint16_t colB, const char* nameB) {
+  spr.drawRect(X, Y, W, H, TFT_DARKGREY);
+  spr.setTextSize(1);
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  if (gps.time.isValid()) {
+    int hh = gps.time.hour();
+    int hrs[4] = { hh, (hh + 8) % 24, (hh + 16) % 24, hh };
+    int xs[4]  = { X, X + W / 3, X + 2 * W / 3, X + W - 12 };
+    for (int i = 0; i < 4; i++) { char tt[4]; snprintf(tt, sizeof(tt), "%02d", hrs[i]); spr.drawString(tt, xs[i], Y + H + 3); }
+  } else {
+    spr.drawString("-24h", X, Y + H + 3);
+    spr.drawString("now", X + W - 18, Y + H + 3);
+  }
+  spr.fillRect(X + 4, Y + 3, 6, 6, colA);
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK); spr.drawString(nameA, X + 13, Y + 2);
+  spr.fillRect(X + 46, Y + 3, 6, 6, colB);   spr.drawString(nameB, X + 55, Y + 2);
+  if (len < 2) { spr.setTextColor(TFT_DARKGREY, TFT_BLACK); spr.drawString("collecting (1 sample / 5 min)", X + 80, Y + H / 2 - 4); return; }
+  int lo = a[0], hi = a[0];
+  for (int i = 0; i < len; i++) {
+    if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i];
+    if (b[i] < lo) lo = b[i]; if (b[i] > hi) hi = b[i];
+  }
+  if (hi - lo < 100) { int mid = (hi + lo) / 2; lo = mid - 50; hi = mid + 50; }
+  char lbl[16];
+  spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  snprintf(lbl, sizeof(lbl), "%.2g", powf(10.0f, hi / 100.0f)); spr.drawString(lbl, 2, Y - 3);
+  snprintf(lbl, sizeof(lbl), "%.2g", powf(10.0f, lo / 100.0f)); spr.drawString(lbl, 2, Y + H - 6);
+  for (int d = (lo / 100) * 100; d <= hi; d += 100) {           // decade gridlines
+    if (d <= lo || d >= hi) continue;
+    int gy = Y + H - 1 - (int)((long)(H - 2) * (d - lo) / (hi - lo));
+    for (int gx = X + 2; gx < X + W - 2; gx += 8) spr.drawPixel(gx, gy, TFT_DARKGREY);
+  }
+  for (int k = 0; k < 2; k++) {
+    const int16_t* v = k ? b : a; uint16_t col = k ? colB : colA;
+    int px = -1, py = 0;
+    for (int i = 0; i < len; i++) {
+      int x = X + (int)((long)(W - 2) * i / (len - 1));
+      int y = Y + H - 1 - (int)((long)(H - 2) * (v[i] - lo) / (hi - lo));
+      if (px >= 0) spr.drawLine(px, py, x, y, col);
+      px = x; py = y;
+    }
+  }
+}
+
 // PROVISIONAL sky-condition label from the thermal delta only. These thresholds are
 // placeholders until field calibration produces a local baseline (README). Not a cloud index.
 const float SKY_CLEAR_DELTA_C  = 20.0f;   // ambient - skyIR above this: probably clear
@@ -86,11 +134,24 @@ void drawSkySensors() {
 #endif
   spr.setTextColor(TFT_GREEN, TFT_BLACK);
   snprintf(l, sizeof(l), "Condition %s", skyConditionLabel()); spr.drawString(l, 8, y); y += 20;
-#if MLX_ENABLED
+  // Charts: the light chart (Task 16) always; the thermal chart shares the space when the
+  // MLX90614 is enabled and there is room for both, otherwise light wins (revisit the layout
+  // when the thermal channel arrives — a page of its own is the likely answer).
   spr.setTextSize(1); spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  spr.drawString("thermal delta, 24 h  (thresholds provisional)", 8, y); y += 12;
-  int h = 224 - 12 - y;
-  if (h >= 30) drawSeries(mlxDeltaHist.v, mlxDeltaHist.len, 42, y, 268, h, 50, TFT_YELLOW, "C");
+  int avail = 224 - 12 - y;                    // rows left above the anomaly-banner strip
+  int hLight = avail - 12, hTherm = 0;
+#if MLX_ENABLED
+  if ((avail - 36) / 2 >= 24) { hLight = (avail - 36) / 2; hTherm = avail - 36 - hLight; }
+#endif
+  spr.drawString("sky light, 24 h  (log, gain-normalised counts/ms)", 8, y); y += 12;
+  if (hLight >= 24) drawSeriesLog2(tslVisHist.v, tslIrHist.v, tslVisHist.len, 42, y, 268, hLight, TFT_CYAN, "vis", TFT_ORANGE, "IR");
+  y += hLight + 12;
+#if MLX_ENABLED
+  if (hTherm >= 24) {
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString("thermal delta, 24 h  (thresholds provisional)", 8, y); y += 12;
+    drawSeries(mlxDeltaHist.v, mlxDeltaHist.len, 42, y, 268, hTherm, 50, TFT_YELLOW, "C");
+  }
 #endif
 }
 
