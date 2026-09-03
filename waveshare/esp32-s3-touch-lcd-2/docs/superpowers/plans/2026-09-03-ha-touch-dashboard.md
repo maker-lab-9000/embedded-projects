@@ -802,7 +802,7 @@ git commit -m "waveshare: Lights page with four lamps, on/off and 0-255 brightne
                 else: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0xE04040 } ]
 ```
 
-- [ ] **Step 1: Substitutions**
+- [x] **Step 1: Substitutions**
 
 ```yaml
   # --- Server page (Proxmox host) ---
@@ -822,19 +822,21 @@ git commit -m "waveshare: Lights page with four lamps, on/off and 0-255 brightne
   ha_disk_entity: sensor.disk_use_percent
 ```
 
-- [ ] **Step 2: Server page**
+- [x] **Step 2: Server page**
 
 Six rows (y = 38, 79, 120, 161, 202, 243), using the pattern above with: `CPU (Tctl)` 0–100 °C yellow 70 red 85; `GPU (edge)` 0–100 °C 70/85; `NVMe` 0–94 °C 60/75; `Proxmox CPU` % 70/90; `Proxmox RAM` % 90/95; `Proxmox disk` % 70/85. Value formats `%.0f °C` for temperatures, `%.0f %%` for percentages. Six imports with the matching thresholds.
 
-- [ ] **Step 3: VMs page**
+- [x] **Step 3: VMs page**
 
 Seven rows, 32 px tall at y = 38 + 35·k (k = 0..6): `Ubuntu CPU` 70/90, `Ubuntu RAM` 90/95, `Ubuntu disk` 70/85, `Ubuntu IO wait` 10/20, `HA CPU` 70/90, `HA RAM` 90/95, `HA disk` 70/85, all `%.0f %%`. For 32 px rows use `height: 32`, bar `height: 6`.
 
-- [ ] **Step 4: Validate, compile, flash; checkpoint (user)**
+- [x] **Step 4: Validate, compile, flash; checkpoint (user)**
 
 Expected: both pages show live values matching the HA gauges; a value crossing its yellow threshold turns the number yellow (e.g. start a CPU-heavy job on the VM). No layout overlap: each row's name, value and bar visible.
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: passed — values match the HA gauges, no overlap in the 32 px VMs rows. Build 1.26 MB flash / 120 KB RAM.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml

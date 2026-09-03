@@ -20,6 +20,21 @@ substitutions:
   innr_name: "Bedroom Lamp"
   bedside_entity: light.extended_color_light_1
   bedside_name: "Bedside Lamp"
+  # --- Server page (Proxmox host) ---
+  cpu_temp_entity: sensor.cpu_temp
+  gpu_temp_entity: sensor.gpu_temp
+  nvme_temp_entity: sensor.nvme_temp
+  px_cpu_entity: sensor.proxmox_cpu_usage
+  px_ram_entity: sensor.proxmox_ram_usage
+  px_disk_entity: sensor.proxmox_root_disk_usage
+  # --- VMs page ---
+  vm_cpu_entity: sensor.cpu_usage
+  vm_ram_entity: sensor.ram_usage
+  vm_disk_entity: sensor.root_disk_usage
+  vm_io_entity: sensor.cpu_iowait
+  ha_cpu_entity: sensor.processor_use
+  ha_ram_entity: sensor.memory_use_percent
+  ha_disk_entity: sensor.disk_use_percent
 
 esphome:
   name: ${name}
@@ -150,6 +165,189 @@ sensor:
     attribute: brightness
     on_value:
       - lvgl.slider.update: { id: sl_bedside, value: !lambda 'return x;' }
+
+  - platform: homeassistant
+    id: cpu_temp
+    entity_id: ${cpu_temp_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_cpu_temp, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_cpu_temp, text: { format: "%.0f °C", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: gpu_temp
+    entity_id: ${gpu_temp_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_gpu_temp, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_gpu_temp, text: { format: "%.0f °C", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_gpu_temp, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_gpu_temp, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_gpu_temp, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: nvme_temp
+    entity_id: ${nvme_temp_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_nvme_temp, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_nvme_temp, text: { format: "%.0f °C", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 60;' }
+          then: [ lvgl.label.update: { id: val_nvme_temp, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 75;' }
+                then: [ lvgl.label.update: { id: val_nvme_temp, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_nvme_temp, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: px_cpu
+    entity_id: ${px_cpu_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_px_cpu, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_px_cpu, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_px_cpu, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 90;' }
+                then: [ lvgl.label.update: { id: val_px_cpu, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_px_cpu, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: px_ram
+    entity_id: ${px_ram_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_px_ram, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_px_ram, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 90;' }
+          then: [ lvgl.label.update: { id: val_px_ram, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 95;' }
+                then: [ lvgl.label.update: { id: val_px_ram, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_px_ram, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: px_disk
+    entity_id: ${px_disk_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_px_disk, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_px_disk, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_px_disk, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_px_disk, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_px_disk, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: vm_cpu
+    entity_id: ${vm_cpu_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_vm_cpu, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_vm_cpu, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_vm_cpu, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 90;' }
+                then: [ lvgl.label.update: { id: val_vm_cpu, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_vm_cpu, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: vm_ram
+    entity_id: ${vm_ram_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_vm_ram, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_vm_ram, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 90;' }
+          then: [ lvgl.label.update: { id: val_vm_ram, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 95;' }
+                then: [ lvgl.label.update: { id: val_vm_ram, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_vm_ram, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: vm_disk
+    entity_id: ${vm_disk_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_vm_disk, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_vm_disk, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_vm_disk, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_vm_disk, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_vm_disk, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: vm_io
+    entity_id: ${vm_io_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_vm_io, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_vm_io, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 10;' }
+          then: [ lvgl.label.update: { id: val_vm_io, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 20;' }
+                then: [ lvgl.label.update: { id: val_vm_io, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_vm_io, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: ha_cpu
+    entity_id: ${ha_cpu_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_ha_cpu, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_ha_cpu, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_ha_cpu, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 90;' }
+                then: [ lvgl.label.update: { id: val_ha_cpu, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_ha_cpu, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: ha_ram
+    entity_id: ${ha_ram_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_ha_ram, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_ha_ram, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 90;' }
+          then: [ lvgl.label.update: { id: val_ha_ram, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 95;' }
+                then: [ lvgl.label.update: { id: val_ha_ram, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_ha_ram, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: ha_disk
+    entity_id: ${ha_disk_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_ha_disk, value: !lambda 'return (int) x;' }
+      - lvgl.label.update: { id: val_ha_disk, text: { format: "%.0f %%", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_ha_disk, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_ha_disk, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_ha_disk, text_color: 0xE04040 } ]
 
 binary_sensor:
   - platform: homeassistant
@@ -530,11 +728,258 @@ lvgl:
     - id: page_server
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Server" } ]
-      widgets: [ label: { align: CENTER, text: "Server (Task 7)", text_color: 0xFFFFFF } ]
+      widgets:
+        - obj:
+            x: 8
+            y: 38
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "CPU (Tctl)", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_cpu_temp, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_cpu_temp
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 79
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "GPU (edge)", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_gpu_temp, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_gpu_temp
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 120
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "NVMe", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_nvme_temp, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_nvme_temp
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 94
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 161
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Proxmox CPU", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_px_cpu, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_px_cpu
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 202
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Proxmox RAM", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_px_ram, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_px_ram
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 243
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Proxmox disk", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_px_disk, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_px_disk
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
     - id: page_vms
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "VMs" } ]
-      widgets: [ label: { align: CENTER, text: "VMs (Task 7)", text_color: 0xFFFFFF } ]
+      widgets:
+        - obj:
+            x: 8
+            y: 38
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "Ubuntu CPU", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_vm_cpu, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_vm_cpu
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 73
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "Ubuntu RAM", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_vm_ram, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_vm_ram
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 108
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "Ubuntu disk", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_vm_disk, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_vm_disk
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 143
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "Ubuntu IO wait", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_vm_io, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_vm_io
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 178
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "HA CPU", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_ha_cpu, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_ha_cpu
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 213
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "HA RAM", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_ha_ram, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_ha_ram
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+        - obj:
+            x: 8
+            y: 248
+            width: 224
+            height: 32
+            styles: row_style
+            widgets:
+              - label: { text: "HA disk", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_ha_disk, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_ha_disk
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 6
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
     - id: page_storage
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Storage" } ]
