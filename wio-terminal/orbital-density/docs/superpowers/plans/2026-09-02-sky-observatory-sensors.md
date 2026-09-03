@@ -803,7 +803,7 @@ git commit -m "orbital-density: pin I2C to 100 kHz and scan the hub at boot"
 - Consumes: `tslInit/tslPoll/tslOk/...` from Task 2; `I2C_REPROBE_MS` from Task 6.
 - Produces: `uint32_t lastReprobeMs;` and the re-probe block that Tasks 8–9 extend.
 
-- [ ] **Step 1: Copy the driver**
+- [x] **Step 1: Copy the driver**
 
 ```bash
 cp wio-terminal/orbital-density/firmware/m1_tsl2591/tsl2591.h wio-terminal/orbital-density/firmware/m2_skyview/tsl2591.h
@@ -811,7 +811,7 @@ cp wio-terminal/orbital-density/firmware/m1_tsl2591/tsl2591.h wio-terminal/orbit
 
 The `m1_tsl2591` copy stays as the frozen bring-up snapshot (same convention as `m1_bme280`).
 
-- [ ] **Step 2: Include, init, poll, re-probe**
+- [x] **Step 2: Include, init, poll, re-probe**
 
 Add after the `i2c_bus.h` include:
 
@@ -844,17 +844,19 @@ In `loop()`, right after `pollDust();` add:
 
 Add a status-line segment before the `Serial.println();` in the 1 Hz block: `Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);`.
 
-- [ ] **Step 3: Compile**
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
 ```
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
 Upload, 5 minutes with a fix. Expected: `tsl` values change with light like in Task 2; `loopMax` unchanged versus the Task 5 baseline; `nmeaFail` growth within baseline. Unplug the TSL2591 QT cable: `tsl` freezes, no crash; plug back in: values resume within 30 s.
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: passed. 184 s run, 85 s with a 3D fix: loopMax median 130 ms (baseline 138), ~213k iterations/s, NMEA pass 10.3/s and **0 failures** while fixed (baseline 7.4/s, 0.37/s). TSL2591 reported 470–555 lux at med/300 ms. Hot-plug test deferred to the Task 8 run.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m2_skyview

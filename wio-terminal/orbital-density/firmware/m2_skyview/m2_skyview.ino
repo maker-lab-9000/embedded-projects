@@ -24,6 +24,7 @@
 #include <SparkFunBQ27441.h>   // fuel gauge on the 650 mAh battery chassis
 #include "loopstats.h"         // loop max-time + iteration counters (see Sensors page / status line)
 #include "i2c_bus.h"           // 100 kHz clock constant, presence probe, boot scan
+#include "tsl2591.h"           // optical sky (0x29), register-level non-blocking driver
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -1201,6 +1202,7 @@ void setup() {
   if (batOk) lipo.setCapacity(650);
   bmeOk = bmeInit();
   if (bmeOk) bmeRead();
+  tslInit();                    // optical sky sensor (0x29); re-probed every 30 s if absent
 
   tft.begin();
   tft.setRotation(3);
@@ -1221,11 +1223,19 @@ const uint32_t MODE_TOGGLE_MS = 45000;
 uint32_t lastToggleMs = 0;   // set to millis() when everFixed first becomes true
 bool gnssModeBds = true;  // true = GPS+BDS, false = GPS+GLONASS
 
+uint32_t lastReprobeMs = 0;   // missing-sensor re-init cadence (hot-plug, flaky cable)
+
 void loop() {
   loopStatsTick();
   feedGps();
   pollButtons();
   pollDust();
+  tslPoll();
+
+  if (millis() - lastReprobeMs >= I2C_REPROBE_MS) {
+    lastReprobeMs = millis();
+    if (!tslOk) tslInit();
+  }
 
   if (everFixed && millis() - lastToggleMs >= MODE_TOGGLE_MS) {
     lastToggleMs = millis();
@@ -1260,6 +1270,7 @@ void loop() {
     Serial.printf(" | loopMax=%lums iter=%lu nmeaPass=%lu nmeaFail=%lu",
       (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast,
       (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
+    Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);
     Serial.println();
   }
 
