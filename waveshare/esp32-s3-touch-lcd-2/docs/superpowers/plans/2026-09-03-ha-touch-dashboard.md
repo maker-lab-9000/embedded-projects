@@ -176,7 +176,7 @@ git commit -m "waveshare: ESPHome base config for ESP32-S3-Touch-LCD-2 (wifi, ap
 **Interfaces:**
 - Produces: `display: lcd` (mipi_spi ST7789V 240×320), `light: backlight` (HA entity), `output: backlight_pwm`.
 
-- [ ] **Step 1: Append the display blocks with a test pattern**
+- [x] **Step 1: Append the display blocks with a test pattern**
 
 ```yaml
 spi:
@@ -207,7 +207,9 @@ display:
       width: 240
       height: 320
     spi_id: spi_lcd
-    cs_pin: GPIO45
+    cs_pin:
+      number: GPIO45
+      ignore_strapping_warning: true   # Waveshare wired LCD CS to a strapping pin; fine in practice
     dc_pin: GPIO42
     data_rate: 40MHz
     invert_colors: true      # IPS panel: Waveshare's demo constructs Arduino_ST7789 with ips=true
@@ -223,7 +225,7 @@ display:
       it.rectangle(0, 0, 240, 320, Color(255, 255, 0));            // yellow 1-px border
 ```
 
-- [ ] **Step 2: Validate, compile, flash (OTA now)**
+- [x] **Step 2: Validate, compile, flash (OTA now)**
 
 ```bash
 esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
@@ -231,7 +233,7 @@ esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 
 (`run` = compile + upload; choose the OTA target when asked.)
 
-- [ ] **Step 3: Hardware checkpoint (user)**
+- [x] **Step 3: Hardware checkpoint (user)**
 
 Expected with the USB-C connector at the bottom: red top-left, green top-right, blue bottom-left, white bottom-right, a yellow border touching all four edges, black elsewhere.
 - Red and blue swapped → `color_order: rgb`.
@@ -256,7 +258,9 @@ display:
 - Pattern rotated → change `rotation` (0/90/180/270) until the USB connector is at the bottom.
 - The `Backlight` light entity in HA dims the panel from 0 to 100 %.
 
-- [ ] **Step 4: Commit**
+Result 2026-09-03: first OTA worked; pattern correct with `model: ST7789V`, `invert_colors: true`, `color_order: bgr`, `rotation: 0` — no changes needed. GPIO45 strapping-pin warning suppressed on `cs_pin`.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml

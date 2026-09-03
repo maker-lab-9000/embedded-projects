@@ -49,3 +49,48 @@ sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
+
+spi:
+  id: spi_lcd
+  clk_pin: GPIO39
+  mosi_pin: GPIO38
+  miso_pin: GPIO40
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin: GPIO1
+    frequency: 1000 Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Backlight"
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+
+display:
+  - platform: mipi_spi
+    id: lcd
+    model: ST7789V
+    dimensions:
+      width: 240
+      height: 320
+    spi_id: spi_lcd
+    cs_pin:
+      number: GPIO45
+      ignore_strapping_warning: true   # Waveshare wired LCD CS to a strapping pin; fine in practice
+    dc_pin: GPIO42
+    data_rate: 40MHz
+    invert_colors: true      # IPS panel: Waveshare's demo constructs Arduino_ST7789 with ips=true
+    color_order: bgr
+    rotation: 0
+    update_interval: 1s      # test pattern only; Task 4 switches to LVGL (update_interval: never)
+    lambda: |-
+      it.fill(Color::BLACK);
+      it.filled_rectangle(0, 0, 120, 80, Color(255, 0, 0));         // top-left RED
+      it.filled_rectangle(120, 0, 120, 80, Color(0, 255, 0));       // top-right GREEN
+      it.filled_rectangle(0, 240, 120, 80, Color(0, 0, 255));       // bottom-left BLUE
+      it.filled_rectangle(120, 240, 120, 80, Color(255, 255, 255)); // bottom-right WHITE
+      it.rectangle(0, 0, 240, 320, Color(255, 255, 0));             // yellow 1-px border
