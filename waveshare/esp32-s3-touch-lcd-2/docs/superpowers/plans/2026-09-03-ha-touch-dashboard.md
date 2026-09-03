@@ -43,7 +43,7 @@ waveshare/esp32-s3-touch-lcd-2/
 **Interfaces:**
 - Produces: a working `esphome` binary (Python 3.12 venv) and filled secrets for every later task.
 
-- [ ] **Step 1: Python 3.12 and ESPHome in a venv**
+- [x] **Step 1: Python 3.12 and ESPHome in a venv**
 
 ```bash
 brew install python@3.12
@@ -52,9 +52,9 @@ brew install python@3.12
 ~/.venvs/esphome/bin/esphome version
 ```
 
-Expected: `Version: 2025.x.y`. If the version is older than 2025.5, `mipi_spi` may be missing; upgrade with `pip install -U esphome`.
+Expected: `Version: 2025.x.y` or newer. Result 2026-09-03: Python 3.12.14, ESPHome 2026.8.2. If the version is older than 2025.5, `mipi_spi` may be missing; upgrade with `pip install -U esphome`.
 
-- [ ] **Step 2: Secrets**
+- [x] **Step 2: Secrets**
 
 ```bash
 cd waveshare/esp32-s3-touch-lcd-2/esphome && cp secrets.yaml.example secrets.yaml
@@ -64,7 +64,7 @@ openssl rand -hex 16      # -> ota_password
 
 Ask the user for the Wi-Fi SSID/password (2.4 GHz) and to paste them plus the two generated values into `secrets.yaml`. `ap_password` is any 8+ character string.
 
-- [ ] **Step 3: Verify nothing secret is tracked**
+- [x] **Step 3: Verify nothing secret is tracked**
 
 ```bash
 git -C /Users/george.babanau/repos/embedded check-ignore -v waveshare/esp32-s3-touch-lcd-2/esphome/secrets.yaml
@@ -82,7 +82,7 @@ Expected: the `.gitignore` rule is printed. Nothing to commit in this task (the 
 **Interfaces:**
 - Produces: `esphome:` node `lcd2`, `api:` with encryption, `ota:`, `wifi:` + fallback AP, `logger:` on native USB, `time: ha_time`. Every later task appends to this file.
 
-- [ ] **Step 1: Write the base configuration**
+- [x] **Step 1: Write the base configuration**
 
 ```yaml
 # Waveshare ESP32-S3-Touch-LCD-2 — Home Assistant touch dashboard (ESPHome, native API).
@@ -137,16 +137,16 @@ sensor:
     update_interval: 60s
 ```
 
-- [ ] **Step 2: Validate and compile**
+- [x] **Step 2: Validate and compile**
 
 ```bash
 esphome config waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 esphome compile waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 ```
 
-Expected: config prints without errors; the first compile downloads the esp-idf toolchain (several minutes) and ends with `Successfully created esp32 image`.
+Expected: config prints without errors; the first compile downloads the esp-idf toolchain (several minutes) and ends with `Successfully created esp32 image`. Result 2026-09-03: ESPHome 2026.8.2, esp-idf 5.5.5, first compile ≈ 8 min incl. toolchain download; a missing closing quote in `secrets.yaml` was the only validation error.
 
-- [ ] **Step 3: Hardware checkpoint (user) — first flash over USB**
+- [x] **Step 3: Hardware checkpoint (user) — first flash over USB**
 
 Ask the user to connect the board over USB-C, put it in download mode (hold BOOT, tap RESET, release BOOT), then:
 
@@ -157,7 +157,9 @@ esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml --device /dev/cu.us
 
 Expected: upload, reset, then log lines `[wifi] ... Connected` and `[api] ... Address: lcd2.local`. In Home Assistant, Settings → Devices & services shows "Discovered: lcd2" → Configure → paste `api_encryption_key`. Then open the ESPHome integration entry for the device → **enable "Allow the device to perform Home Assistant actions"** (needed from Task 5 on for thermostat mode taps and Task 6 for switches). The `WiFi Signal` sensor appears in HA.
 
-- [ ] **Step 4: Commit**
+Result 2026-09-03: USB flash OK (esptool resets the S3 into the bootloader over USB-serial/JTAG, no buttons needed after the first time). First boot failed to join Wi-Fi because the SSID carried a stray `"` from an unclosed quote in `secrets.yaml`; fixed, re-flashed, then `[wifi] Connected`, `lcd2.local` pingable, API port 6053 open. HA adoption + the actions permission: user step, pending.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
