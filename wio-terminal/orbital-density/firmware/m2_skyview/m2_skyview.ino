@@ -26,6 +26,11 @@
 #include "i2c_bus.h"           // 100 kHz clock constant, presence probe, boot scan
 #include "tsl2591.h"           // optical sky (0x29), register-level non-blocking driver
 #include "mmc5603.h"           // magnetometer (0x30) on the arm; continuous 10 Hz, auto set/reset
+// MLX90614 / GY-906 is deferred until its header is soldered. 0 = driver not compiled, the
+// mlx_* CSV columns stay in the schema (written empty), pages say "not installed".
+// Set to 1 after running the deferred Tasks 4 and 9.
+#define MLX_ENABLED 0
+#include "observation.h"       // unified 1 Hz record + /obs.csv column table
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -1121,6 +1126,67 @@ void drawObs() {
   spr.drawString(info, 4, 228);
 }
 
+// ---------- observation log (/obs.csv, one row per second) ----------
+// Separate from /gps.csv (60 s, legacy schema). File stays open; flushed every 10 s so a
+// 1 Hz cadence costs one buffered print per second, not an open/close on the card.
+// OBS_EVERY_N = 1 logs every second; raise it (e.g. 10) to log every N seconds.
+const char*    OBS_PATH     = "/obs.csv";
+const int      OBS_EVERY_N  = 1;
+const uint32_t OBS_FLUSH_MS = 10000;
+File     obsFile;
+bool     obsOpen = false;
+uint32_t lastObsFlushMs = 0;
+uint32_t obsRowsWritten = 0, obsWriteErrors = 0;
+
+void assembleObservation() {
+  obs.uptimeS = millis() / 1000;
+  if (gps.date.isValid() && gps.time.isValid())
+    snprintf(obs.utc, sizeof(obs.utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             gps.date.year(), gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  else obs.utc[0] = 0;
+  obs.fixValid = gps.location.isValid();
+  obs.lat  = obs.fixValid ? gps.location.lat() : 0.0;
+  obs.lon  = obs.fixValid ? gps.location.lng() : 0.0;
+  obs.altM = gps.altitude.isValid() ? (float)gps.altitude.meters() : NAN;
+  obs.hdop = gps.hdop.isValid() ? (float)gps.hdop.hdop() : NAN;
+  obs.used = gps.satellites.isValid() ? (uint8_t)gps.satellites.value() : 0;
+  obs.inView = (uint8_t)countInView();
+  obs.fix  = gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none";
+  obs.tslOk = tslOk; obs.tslFull = tslFull; obs.tslIr = tslIr; obs.tslGain = tslGainName();
+  obs.tslIntegMs = tslIntegMs; obs.tslLux = tslLux; obs.tslSat = tslSat;
+#if MLX_ENABLED
+  obs.mlxOk = mlxOk; obs.mlxAmbC = mlxAmbC; obs.mlxObjC = mlxObjC; obs.mlxDeltaC = mlxDeltaC;
+#else
+  obs.mlxOk = false; obs.mlxAmbC = obs.mlxObjC = obs.mlxDeltaC = NAN;   // GY-906 deferred: columns stay, fields empty
+#endif
+  obs.magOk = magOk; obs.bx = magMeanX; obs.by = magMeanY; obs.bz = magMeanZ;
+  obs.bTotal = magMeanTotal; obs.headingDeg = magMeanHeading;
+  obs.bmeOk = bmeOk; obs.tempC = bmeTemp; obs.hum = bmeHum; obs.presHpa = bmePres;
+  obs.loopMaxMs = (uint16_t)loopMaxMsLast;
+}
+
+bool obsOpenFile() {
+  if (!sdOk) return false;
+  bool isNew = !SD.exists(OBS_PATH);
+  obsFile = SD.open(OBS_PATH, FILE_APPEND);
+  if (!obsFile) return false;
+  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) obsFile.print(h); }
+  lastObsFlushMs = millis();
+  obsOpen = true;
+  return true;
+}
+
+void logObs() {
+  if (!sdOk) { if (obsOpen) { obsFile.close(); obsOpen = false; } return; }   // logRow() re-inits the card
+  if (!obsOpen && !obsOpenFile()) return;
+  char row[512];
+  if (!obsRow(obs, row, sizeof(row))) return;
+  if (obsFile.print(row) == 0) { obsWriteErrors++; obsFile.close(); obsOpen = false; return; }
+  obsRowsWritten++;
+  if (millis() - lastObsFlushMs >= OBS_FLUSH_MS) { lastObsFlushMs = millis(); obsFile.flush(); }
+}
+
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
   if (sdOk && !SD.exists(LOG_PATH)) {
@@ -1266,6 +1332,9 @@ void loop() {
     computeBodies();
     if (bmeOk) bmeRead();
     magRollSecond();
+    assembleObservation();
+    static uint8_t obsTick = 0;
+    if (++obsTick >= OBS_EVERY_N) { obsTick = 0; logObs(); }
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
     // Status line. NOTE: this core's Serial.printf() truncates at ~80 chars, so the line is
     // built from several printf calls; each sensor module appends its own segment.
@@ -1278,6 +1347,7 @@ void loop() {
       (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
     Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);
     Serial.printf(" | mag |B|=%.1f hdg=%.0f", magMeanTotal, magMeanHeading);
+    Serial.printf(" | obs rows=%lu err=%lu", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors);
     Serial.println();
   }
 

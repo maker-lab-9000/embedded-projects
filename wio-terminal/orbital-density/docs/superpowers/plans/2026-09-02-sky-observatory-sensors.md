@@ -1131,7 +1131,7 @@ git commit -m "orbital-density: integrate MLX90614 thermal sky sensor"
 - Consumes: every `xxxOk`/value global from Tasks 7–8 (Task 9 only under `MLX_ENABLED`), `bmeOk/bmeTemp/bmeHum/bmePres`, `loopMaxMsLast`, `gps`, `countInView()`, `sdOk`, `SD`.
 - Produces: `struct Observation; Observation obs;` `bool obsHeader(char*, size_t); bool obsRow(const Observation&, char*, size_t);` sketch-side `void assembleObservation(); void logObs();` `uint32_t obsRowsWritten, obsWriteErrors; bool obsOpen;` `const int OBS_EVERY_N;`
 
-- [ ] **Step 1: Write `observation.h`**
+- [x] **Step 1: Write `observation.h`**
 
 ```cpp
 // observation.h — the unified per-second record: GNSS time/position plus every sensor's
@@ -1219,7 +1219,7 @@ bool obsRow(const Observation& o, char* out, size_t n) {
 }
 ```
 
-- [ ] **Step 2: Add the sketch-side glue**
+- [x] **Step 2: Add the sketch-side glue**
 
 Add after the `mmc5603.h` include:
 
@@ -1306,7 +1306,7 @@ In the 1 Hz block of `loop()`, after `magRollSecond();` add:
 
 (Keep `if (screenOn) drawPage();` after these lines.) Add a status-line segment before the `Serial.println();`: `Serial.printf(" | obs rows=%lu err=%lu", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors);`.
 
-- [ ] **Step 3: Compile**
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
@@ -1314,7 +1314,7 @@ arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbita
 
 If the compiler rejects the lambda-to-function-pointer conversions in `OBS_COLS`, replace each lambda with a named `static void fmtXxx(char*, size_t, const Observation&)` function above the table; the table content is unchanged.
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
 Upload with the SD card in, run 3 minutes, power off, read the card on a PC:
 - `/obs.csv` exists, first line is the 29-name header, then ~1 row per second;
@@ -1328,7 +1328,9 @@ Quick sanity check on the PC:
 head -3 obs.csv; awk -F, 'NR>1{n++} END{print n" rows"}' obs.csv
 ```
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: 5 min with a 3D fix: 299 rows in 300 s, 0 write errors, loopMax median 139 ms / max 156 ms (10 s flush), NMEA pass 12.5/s, fail 0.00/s. Card contents (header, empty `mlx_*` fields) to be checked at the Task 12 card pull.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m2_skyview
