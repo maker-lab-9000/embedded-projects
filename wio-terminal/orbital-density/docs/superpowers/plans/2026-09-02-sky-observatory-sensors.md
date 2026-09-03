@@ -221,7 +221,7 @@ git commit -m "orbital-density: add hub scan, GNSS UART check and header pin-swe
   - `uint16_t tslFull, tslIr; uint8_t tslGainIdx; uint16_t tslIntegMs; float tslLux; bool tslSat;`
   - `uint32_t tslLastMs, tslSampleCount, tslErrCount;` `const char* tslGainName();`
 
-- [ ] **Step 1: Write the driver header**
+- [x] **Step 1: Write the driver header**
 
 Create `wio-terminal/orbital-density/firmware/m1_tsl2591/tsl2591.h`:
 
@@ -351,7 +351,7 @@ void tslPoll() {
 }
 ```
 
-- [ ] **Step 2: Write the bring-up sketch**
+- [x] **Step 2: Write the bring-up sketch**
 
 Create `wio-terminal/orbital-density/firmware/m1_tsl2591/m1_tsl2591.ino`:
 
@@ -390,7 +390,7 @@ void loop() {
 }
 ```
 
-- [ ] **Step 3: Compile**
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m1_tsl2591
@@ -398,7 +398,7 @@ arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbita
 
 Expected: clean compile.
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
 Upload, open the serial monitor. Expected within ~5 s:
 - indoor daylight: `gain=low` or `med`, lux in the tens to hundreds, `n` increasing by ~3 per second at 300 ms;
@@ -406,7 +406,9 @@ Upload, open the serial monitor. Expected within ~5 s:
 - phone torch on the sensor: `lux=SAT` for one line, then gain steps down until lux is a number again;
 - `err` stays 0.
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: passed. Indoor 180 lux at med/300 ms; torch stepped gain down to low within a second; opaque cover stepped med→high at 0.69→0.65 lux (consistent across gains); dimming room stepped low/300→low/600→med/600 at the 200-count threshold. A bare hand only reached 32 lux (skin passes near-IR), so use an opaque object for dark tests. `max` gain and the SAT flag path were not reached and will be exercised at night.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m1_tsl2591
