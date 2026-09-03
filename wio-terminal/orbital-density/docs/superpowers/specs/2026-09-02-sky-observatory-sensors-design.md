@@ -283,9 +283,9 @@ Registers (command byte `0xA0 | reg`): `ENABLE 0x00` (PON `0x01`, AEN `0x02`),
 
 ### 5.2 MMC5603 (Adafruit_MMC56x3, continuous mode)
 
-- **Init:** `mag.begin(0x30, &Wire)`, `mag.setDataRate(10)`, `mag.setContinuousMode(true)`, then one `mag.magnetSetReset()` (two 1 ms delays, acceptable in setup).
+- **Init:** `mmc.begin(0x30, &Wire)`, `mmc.setDataRate(10)`, `mmc.setContinuousMode(true)`, then a raw write of CTRL0 (`0x1B`) = `0x20` to enable **automatic set/reset**. The datasheet recommends it; without it the raw bridge offset is specified at up to ±1 G (±100 µT) per axis, and the Adafruit library never sets it (its `reset()` leaves the sensor in RESET polarity, output = −H + offset). Bring-up on 2026-09-03 read a steady 173 µT that was pure offset.
 - **Poll:** every 100 ms `mag.getEvent(&e)` (register read only in continuous mode). Apply hard-iron offsets `MAG_OFF_X/Y/Z` (constants, default 0, filled in Phase 5). Accumulate for the 1 s mean. Push `bTotal × 10` into a `Ring<int16_t,288>` every 5 min for the 24 h chart.
-- **Set/Reset:** call `magnetSetReset()` every 60 s to purge offset drift; skip the sample taken in that iteration.
+- **Set/Reset:** handled on-chip by auto set/reset; no periodic `magnetSetReset()` (it would flip polarity).
 - **Heading:** `atan2(y, x)` in degrees, normalised to 0–360, plus `MAG_MOUNT_OFFSET_DEG` and `MAG_DECLINATION_DEG` constants (default 0, documented). Valid only when the instrument is level; the built-in LIS3DHTR on `Wire1` is the obvious future tilt source.
 
 ### 5.3 MLX90614 (Adafruit_MLX90614) — deferred, see §4.7
