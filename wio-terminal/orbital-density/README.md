@@ -212,7 +212,8 @@ Eight pages: Sky → Detail → Chart → Env → Obs → SkySens → Mag → Se
 (Dust reappears between Chart and Env when `DUST_ENABLED` is 1). **Top-left button (KEY_C)**
 or **5-way right** = next page, **5-way left** = previous page (both wrap). The **5-way
 center-press toggles the screen** on/off (GPS parsing, sensor polling, and SD logging keep
-running while it's off — the backlight is the main power draw).
+running while it's off — the backlight is the main power draw). **5-way up** toggles the Sky
+page between north-up and heading-up (magnetometer).
 
 Header (all pages): `V <in-view>  U <used>  <fix>`, battery % (if the chassis
 fuel gauge is present), and a green `SD` / red `SD!` badge.
@@ -225,8 +226,12 @@ fuel gauge is present), and a green `SD` / red `SD!` badge.
   The **Sun, Moon, and five naked-eye planets** (Mercury, Venus, Mars,
   Jupiter, Saturn) are plotted at their true alt/azimuth when above the
   horizon, each with a distinct color and label. Positions come from a
-  low-precision Schlyter ephemeris computed from GPS position + UTC. The plot
-  assumes the device is pointed north — there's no on-board compass.
+  low-precision Schlyter ephemeris computed from GPS position + UTC. An orange
+  wedge on the ring marks the device's magnetic heading (`Hdg NNN mag`, from the
+  MMC5603); 5-way up switches to **heading-up**, rotating satellites, planets and
+  the N/E/S/W letters so the top of the screen is where the device points. Raw
+  magnetic heading until the magnetometer is calibrated (mount offset, declination,
+  hard-iron — see Magnetometer calibration); the device must be level.
 - **Detail page** — numeric: in view (and positioned), per-constellation
   counts, satellites used, fix type, HDOP, strongest SNR, lat/lon, altitude,
   UTC time.

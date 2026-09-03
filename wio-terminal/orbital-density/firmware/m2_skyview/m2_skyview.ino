@@ -42,6 +42,7 @@ TFT_eSprite spr = TFT_eSprite(&tft);   // off-screen buffer: draw here, blit onc
 
 bool batOk = false;            // BQ27441 present (battery chassis)
 bool screenOn = true;
+bool skyHeadingUp = false;     // Sky page: false = north-up, true = heading-up (5-way UP toggles); used by drawSky()
 bool prev5s = HIGH;
 void setScreen(bool on);       // defined after the draw functions
 void drawPage();
@@ -680,17 +681,39 @@ void drawSky() {
   spr.drawCircle(CX, CY, R, TFT_DARKGREY);
   spr.drawCircle(CX, CY, R * 2 / 3, TFT_DARKGREY);
   spr.drawCircle(CX, CY, R / 3, TFT_DARKGREY);
+  // Orientation: north-up by default; heading-up rotates the whole plot by -heading so the
+  // top of the screen is the direction the device points. Raw MAGNETIC heading from the
+  // MMC5603 until MAG_MOUNT_OFFSET_DEG / MAG_DECLINATION_DEG / hard-iron offsets are set.
+  float rot = (skyHeadingUp && magOk) ? -magMeanHeading : 0.0f;
   spr.setTextSize(1);
-  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  spr.drawString("N", CX - 2, CY - R - 10);
-  spr.drawString("S", CX - 2, CY + R + 2);
-  spr.drawString("E", CX + R + 2, CY - 3);
-  spr.drawString("W", CX - R - 10, CY - 3);
+  static const char* dirName[4] = {"N", "E", "S", "W"};
+  for (int d = 0; d < 4; d++) {
+    float da = (d * 90.0f + rot) * 0.017453292f;
+    int lx = CX + (int)((R + 9) * sinf(da)) - 2;
+    int ly = CY - (int)((R + 9) * cosf(da)) - 3;
+    spr.setTextColor(d == 0 ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(dirName[d], lx, ly);
+  }
   drawLegend();
+  // Heading marker: orange wedge on the ring where the device points, plus a readout.
+  spr.setTextSize(1);
+  if (magOk) {
+    float ha = (magMeanHeading + rot) * 0.017453292f;
+    int tx  = CX + (int)((R - 7) * sinf(ha)),         ty  = CY - (int)((R - 7) * cosf(ha));
+    int b1x = CX + (int)((R + 5) * sinf(ha - 0.08f)), b1y = CY - (int)((R + 5) * cosf(ha - 0.08f));
+    int b2x = CX + (int)((R + 5) * sinf(ha + 0.08f)), b2y = CY - (int)((R + 5) * cosf(ha + 0.08f));
+    spr.fillTriangle(tx, ty, b1x, b1y, b2x, b2y, TFT_ORANGE);
+    char h[28]; snprintf(h, sizeof(h), "Hdg %3.0f mag  %s", magMeanHeading, skyHeadingUp ? "H-UP" : "N-UP");
+    spr.setTextColor(TFT_ORANGE, TFT_BLACK);
+    spr.drawString(h, 4, 26);
+  } else {
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(skyHeadingUp ? "Hdg -- no mag  N-UP" : "Hdg --", 4, 26);
+  }
   for (int i = 0; i < satCount; i++) {
     if (sats[i].elev < 0) continue;   // position not yet known: skip on the map
     float r = R * (90 - sats[i].elev) / 90.0f;
-    float a = sats[i].azim * 0.017453292f;   // deg->rad
+    float a = (sats[i].azim + rot) * 0.017453292f;   // deg->rad, rotated for heading-up
     int x = CX + (int)(r * sinf(a));
     int y = CY - (int)(r * cosf(a));
     int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
@@ -707,7 +730,7 @@ void drawSky() {
     uint16_t col = bodyColor[b];
     if (bodies[b].alt > 0) {
       float rr = R * (90 - bodies[b].alt) / 90.0f;
-      float aa = bodies[b].az * 0.017453292f;
+      float aa = (bodies[b].az + rot) * 0.017453292f;
       int bx = CX + (int)(rr * sinf(aa));
       int by = CY - (int)(rr * cosf(aa));
       if (b == B_SUN) {
@@ -749,7 +772,7 @@ void drawSky() {
 
 // ---------- detail page ----------
 
-int  page = 0;              // 0 = sky, 1 = detail, 2 = chart
+int  page = 0;              // index into PAGES[]
 bool prevKeyC = HIGH;
 
 // satellite history for the chart: per-constellation + unlocated, over 24 h
@@ -792,7 +815,7 @@ void drawDetail() {
   row(l);
 }
 
-bool prev5L = HIGH, prev5R = HIGH;
+bool prev5L = HIGH, prev5R = HIGH, prev5U = HIGH;
 
 void gotoPage(int p) {
   int n = pageCount();
@@ -812,6 +835,10 @@ void pollButtons() {
   bool l = digitalRead(WIO_5S_LEFT);            // 5-way left: previous page
   if (prev5L == HIGH && l == LOW) gotoPage(page - 1);
   prev5L = l;
+
+  bool u = digitalRead(WIO_5S_UP);              // 5-way up: Sky page north-up <-> heading-up
+  if (prev5U == HIGH && u == LOW) { skyHeadingUp = !skyHeadingUp; if (screenOn) drawPage(); }
+  prev5U = u;
 
   bool s5 = digitalRead(WIO_5S_PRESS);          // 5-way centre press: screen on/off
   if (prev5s == HIGH && s5 == LOW) setScreen(!screenOn);
@@ -1328,6 +1355,7 @@ void setup() {
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
   pinMode(WIO_5S_LEFT, INPUT_PULLUP);
   pinMode(WIO_5S_RIGHT, INPUT_PULLUP);
+  pinMode(WIO_5S_UP, INPUT_PULLUP);
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
 

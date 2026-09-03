@@ -1989,6 +1989,89 @@ git commit -m "orbital-density: magnetometer calibration tool and field-calibrat
 
 ---
 
+### Task 15: Sky page heading marker and heading-up mode
+
+Added 2026-09-03 at the user's request after Task 12. Uses the 5-way UP direction reserved in the spec (§4.5).
+
+**Files:**
+- Modify: `wio-terminal/orbital-density/firmware/m2_skyview/m2_skyview.ino` — globals near `int page`, `pollButtons()`, `setup()` pin modes, `drawSky()`
+- Modify: `wio-terminal/orbital-density/README.md` — Display & controls, Sky page bullet
+
+**Interfaces:**
+- Consumes: `magOk`, `magMeanHeading` (Task 8), `skyHeadingUp` (new), `sats[]`, `bodies[]`, `CX/CY/R`.
+- Produces: `bool skyHeadingUp;` toggled by 5-way UP; `drawSky()` rotates by `rot = skyHeadingUp && magOk ? -magMeanHeading : 0`.
+
+- [x] **Step 1: State and button**
+
+Next to `bool screenOn = true;` in the top globals (it must precede `drawSky()`, which is defined before the page-state block) add `bool skyHeadingUp = false;`; extend `bool prev5L = HIGH, prev5R = HIGH;` with `prev5U = HIGH`; in `setup()` add `pinMode(WIO_5S_UP, INPUT_PULLUP);`; in `pollButtons()` after the LEFT block:
+
+```cpp
+  bool u = digitalRead(WIO_5S_UP);              // 5-way up: Sky page north-up <-> heading-up
+  if (prev5U == HIGH && u == LOW) { skyHeadingUp = !skyHeadingUp; if (screenOn) drawPage(); }
+  prev5U = u;
+```
+
+- [x] **Step 2: Rotate the plot and draw the marker**
+
+In `drawSky()` replace the four fixed `N/S/E/W` `drawString` lines with:
+
+```cpp
+  // Orientation: north-up by default; heading-up rotates the whole plot by -heading so the
+  // top of the screen is the direction the device points. Raw MAGNETIC heading from the
+  // MMC5603 until MAG_MOUNT_OFFSET_DEG / MAG_DECLINATION_DEG / hard-iron offsets are set.
+  float rot = (skyHeadingUp && magOk) ? -magMeanHeading : 0.0f;
+  spr.setTextSize(1);
+  static const char* dirName[4] = {"N", "E", "S", "W"};
+  for (int d = 0; d < 4; d++) {
+    float da = (d * 90.0f + rot) * 0.017453292f;
+    int lx = CX + (int)((R + 9) * sinf(da)) - 2;
+    int ly = CY - (int)((R + 9) * cosf(da)) - 3;
+    spr.setTextColor(d == 0 ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(dirName[d], lx, ly);
+  }
+  drawLegend();
+  // Heading marker: orange wedge on the ring where the device points, plus a readout.
+  spr.setTextSize(1);
+  if (magOk) {
+    float ha = (magMeanHeading + rot) * 0.017453292f;
+    int tx  = CX + (int)((R - 7) * sinf(ha)),         ty  = CY - (int)((R - 7) * cosf(ha));
+    int b1x = CX + (int)((R + 5) * sinf(ha - 0.08f)), b1y = CY - (int)((R + 5) * cosf(ha - 0.08f));
+    int b2x = CX + (int)((R + 5) * sinf(ha + 0.08f)), b2y = CY - (int)((R + 5) * cosf(ha + 0.08f));
+    spr.fillTriangle(tx, ty, b1x, b1y, b2x, b2y, TFT_ORANGE);
+    char h[28]; snprintf(h, sizeof(h), "Hdg %3.0f mag  %s", magMeanHeading, skyHeadingUp ? "H-UP" : "N-UP");
+    spr.setTextColor(TFT_ORANGE, TFT_BLACK);
+    spr.drawString(h, 4, 26);
+  } else {
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(skyHeadingUp ? "Hdg -- no mag  N-UP" : "Hdg --", 4, 26);
+  }
+```
+
+and add `+ rot` to both azimuth conversions: `float a = (sats[i].azim + rot) * 0.017453292f;` and `float aa = (bodies[b].az + rot) * 0.017453292f;`.
+
+- [x] **Step 3: Compile**
+
+```bash
+arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
+```
+
+- [x] **Step 4: Hardware checkpoint (user)**
+
+On the Sky page: an orange wedge sits on the ring at the magnetic heading and `Hdg NNN mag  N-UP` shows top-left. Press 5-way UP: the label becomes `H-UP`, the wedge moves to the top, and the N/E/S/W letters, satellites and planets rotate so the letters read correctly for the way the device points. Turn the whole instrument slowly on the desk: in H-UP the plot counter-rotates and the wedge stays at the top; in N-UP the wedge follows the heading. Heading is raw magnetic until Task 14 sets the mount offset, declination and hard-iron constants, so expect an offset of tens of degrees for now.
+
+Result 2026-09-03: user confirmed the wedge follows the heading in N-UP and H-UP rotates the plot with the wedge pinned at the top.
+
+- [x] **Step 5: README + commit**
+
+README Display & controls: add "5-way up toggles the Sky page between north-up and heading-up (magnetometer)"; Sky page bullet: replace "The plot assumes the device is pointed north — there's no on-board compass." with the marker/heading-up description and the calibration caveat.
+
+```bash
+git add wio-terminal/orbital-density/firmware/m2_skyview/m2_skyview.ino wio-terminal/orbital-density/README.md wio-terminal/orbital-density/docs/superpowers
+git commit -m "orbital-density: Sky page heading marker and heading-up mode from the magnetometer"
+```
+
+---
+
 ## Self-review notes
 
 - Spec §2 (wiring/parts/addresses) → Task 1 + Task 13. §3 (blocking constraints) → Tasks 2, 3, 5, 9 gate. §4.1–4.2 (files, module contract) → Tasks 5–9. §4.3–4.4 (Observation, column table) → Task 10. §4.5 (page table, 5-way) → Task 11. §4.6 (dust gate) → Task 11. §5 drivers → Tasks 2/7, 8, 9. §6 display → Task 12. §7 metric → Task 5. §8 logging → Task 10. §9 bring-up → Tasks 1–4. §10 verification → each task's checkpoint. §11 calibration → Task 14. §12 docs → Task 13.

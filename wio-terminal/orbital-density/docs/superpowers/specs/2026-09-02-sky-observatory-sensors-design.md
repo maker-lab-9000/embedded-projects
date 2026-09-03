@@ -247,8 +247,8 @@ const PageDef PAGES[] = { {"Sky", drawSky}, {"Detail", drawDetail}, {"Chart", dr
 
 Navigation: top button `WIO_KEY_C` keeps cycling forward (unchanged
 behaviour); 5-way **right** = next page, **left** = previous page; centre
-press still toggles the backlight. Up/down are reserved for a later
-"rotate sky plot by heading" toggle.
+press still toggles the backlight. **Up** toggles the Sky page between north-up and
+heading-up (added 2026-09-03, plan Task 15); down is still free.
 
 ### 4.6 Dust sensor gate
 
@@ -310,6 +310,7 @@ the new pages; the three existing chart renderers are not touched.
 
 - **SkySens:** visible lux (or raw counts with gain when lux is NAN), IR fraction %, sky IR °C, Δ sky °C, TSL gain/integration, and a "Condition" line that reads `CLEAR / CLOUDY / --` from a placeholder threshold on Δ sky that is explicitly marked provisional until Phase 5 data exists.
 - **Mag:** Bx By Bz in µT, |B|, heading, plus the 24 h |B| chart.
+- **Sky (existing page, Task 15):** an orange wedge on the ring marks the device's magnetic heading with a `Hdg NNN mag` readout; 5-way up switches to heading-up, rotating satellites, bodies and the N/E/S/W letters by −heading. Raw magnetic heading until the Task 14 constants are set.
 - **Sensors:** one row per I²C device: address, name, OK/missing, last-sample age; last boot scan result; `loopMax ms` and `nmeaBad` counters from §7.
 
 ## 7. Timing instrumentation and regression metric
