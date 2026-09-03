@@ -1843,7 +1843,7 @@ git commit -m "orbital-density docs: sky-observatory sensors wiring, pages, obs.
 - Consumes: `/obs.csv` columns `mag_x_ut, mag_y_ut, mag_z_ut, mag_total_ut, uptime_s` (Task 10).
 - Produces: numbers for `MAG_OFF_X/Y/Z`; a documented arm-length result; data for replacing `SKY_CLEAR_DELTA_C` / `SKY_CLOUDY_DELTA_C` later.
 
-- [ ] **Step 1: Write `tools/mag_calib.py`**
+- [x] **Step 1: Write `tools/mag_calib.py`**
 
 ```python
 #!/usr/bin/env python3
@@ -1913,7 +1913,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Smoke-test the script on a synthetic file**
+- [x] **Step 2: Smoke-test the script on a synthetic file**
 
 ```bash
 python3 - <<'EOF'
