@@ -4,6 +4,13 @@
 substitutions:
   name: lcd2
   friendly_name: "LCD2 Dashboard"
+  # --- Home page ---
+  thermo1_entity: climate.thermostat_14
+  thermo1_name: "Theo's room"
+  thermo2_entity: climate.thermostat_15
+  thermo2_name: "Living Room"
+  pm25_entity: sensor.nova_pm2_5
+  pm10_entity: sensor.nova_pm10
 
 esphome:
   name: ${name}
@@ -27,6 +34,10 @@ logger:
 api:
   encryption:
     key: !secret api_encryption_key
+  on_client_connected:
+    - lvgl.label.update: { id: lbl_link, text: "HA", text_color: 0x40C040 }
+  on_client_disconnected:
+    - lvgl.label.update: { id: lbl_link, text: "HA", text_color: 0xE04040 }
 
 ota:
   - platform: esphome
@@ -44,11 +55,79 @@ captive_portal:
 time:
   - platform: homeassistant
     id: ha_time
+    on_time:
+      - seconds: 0
+        then:
+          - lvgl.label.update:
+              id: lbl_time
+              text: !lambda 'return id(ha_time).now().strftime("%H:%M");'
 
 sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
     update_interval: 60s
+  - platform: homeassistant
+    id: thermo1_current
+    entity_id: ${thermo1_entity}
+    attribute: current_temperature
+    on_value:
+      - lvgl.label.update: { id: thermo1_value, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: thermo1_target
+    entity_id: ${thermo1_entity}
+    attribute: temperature
+    on_value:
+      - lvgl.label.update: { id: thermo1_target_lbl, text: { format: "set %.1f", args: [x] } }
+  - platform: homeassistant
+    id: thermo2_current
+    entity_id: ${thermo2_entity}
+    attribute: current_temperature
+    on_value:
+      - lvgl.label.update: { id: thermo2_value, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: thermo2_target
+    entity_id: ${thermo2_entity}
+    attribute: temperature
+    on_value:
+      - lvgl.label.update: { id: thermo2_target_lbl, text: { format: "set %.1f", args: [x] } }
+  - platform: homeassistant
+    id: pm25
+    entity_id: ${pm25_entity}
+    on_value:
+      - lvgl.label.update: { id: pm25_value, text: { format: "%.0f", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 10;' }
+          then: [ lvgl.label.update: { id: pm25_value, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 20;' }
+                then: [ lvgl.label.update: { id: pm25_value, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: pm25_value, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: pm10
+    entity_id: ${pm10_entity}
+    on_value:
+      - lvgl.label.update: { id: pm10_value, text: { format: "%.0f", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 20;' }
+          then: [ lvgl.label.update: { id: pm10_value, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 40;' }
+                then: [ lvgl.label.update: { id: pm10_value, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: pm10_value, text_color: 0xE04040 } ]
+
+text_sensor:
+  - platform: homeassistant
+    id: thermo1_mode
+    entity_id: ${thermo1_entity}
+    on_value:
+      - lvgl.label.update: { id: thermo1_mode_lbl, text: !lambda 'return x;' }
+  - platform: homeassistant
+    id: thermo2_mode
+    entity_id: ${thermo2_entity}
+    on_value:
+      - lvgl.label.update: { id: thermo2_mode_lbl, text: !lambda 'return x;' }
 
 spi:
   id: spi_lcd
@@ -102,34 +181,129 @@ touchscreen:
     address: 0x15
     display: lcd
     update_interval: 50ms
-    on_touch:
-      - lambda: 'ESP_LOGI("touch", "x=%d y=%d", touch.x, touch.y);'
 
 lvgl:
   displays: [lcd]
   touchscreens: [touch]
   buffer_size: 100%
   default_font: montserrat_20
+  style_definitions:
+    - id: tile_style
+      bg_color: 0x1E2430
+      bg_opa: COVER
+      radius: 10
+      border_width: 0
+      pad_all: 6
+    - id: row_style
+      bg_color: 0x1E2430
+      bg_opa: COVER
+      radius: 8
+      border_width: 0
+      pad_all: 4
+    - id: nav_style
+      bg_color: 0x2A3242
+      radius: 8
+  top_layer:
+    widgets:
+      - label: { id: lbl_time, x: 8, y: 8, text: "--:--", text_color: 0xFFFFFF }
+      - label: { id: lbl_title, align: TOP_MID, y: 8, text: "Home", text_color: 0xA0A8B8 }
+      - label: { id: lbl_link, x: 208, y: 8, text: "HA", text_color: 0xE04040 }
+      - button:
+          x: 8
+          y: 286
+          width: 60
+          height: 28
+          styles: nav_style
+          widgets: [ label: { align: CENTER, text: "<" } ]
+          on_click: [ lvgl.page.previous ]
+      - button:
+          x: 172
+          y: 286
+          width: 60
+          height: 28
+          styles: nav_style
+          widgets: [ label: { align: CENTER, text: ">" } ]
+          on_click: [ lvgl.page.next ]
   pages:
-    - id: page_test
+    - id: page_home
       bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Home" } ]
       widgets:
-        - label:
-            id: lbl_test
-            align: CENTER
-            text_color: 0xFFFFFF
-            text: "Touch me"
-        - button:
-            id: btn_test
-            x: 70
-            y: 220
-            width: 100
-            height: 50
+        - obj:
+            x: 8
+            y: 36
+            width: 108
+            height: 118
+            styles: tile_style
+            on_click:                           # tap the tile: heat -> off -> auto -> heat
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: "${thermo1_entity}"
+                    hvac_mode: !lambda |-
+                      std::string m = id(thermo1_mode).state;
+                      if (m == "heat") return std::string("off");
+                      if (m == "off") return std::string("auto");
+                      return std::string("heat");
             widgets:
-              - label:
-                  align: CENTER
-                  text: "Tap"
-            on_click:
-              - lvgl.label.update:
-                  id: lbl_test
-                  text: "Tapped!"
+              - label: { text: "${thermo1_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: thermo1_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: thermo1_target_lbl, text: "set --", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+              - label: { id: thermo1_mode_lbl, text: "--", text_font: montserrat_14, text_color: 0xE0C040, align: BOTTOM_RIGHT }
+        - obj:
+            x: 124
+            y: 36
+            width: 108
+            height: 118
+            styles: tile_style
+            on_click:                           # tap the tile: heat -> off -> auto -> heat
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: "${thermo2_entity}"
+                    hvac_mode: !lambda |-
+                      std::string m = id(thermo2_mode).state;
+                      if (m == "heat") return std::string("off");
+                      if (m == "off") return std::string("auto");
+                      return std::string("heat");
+            widgets:
+              - label: { text: "${thermo2_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: thermo2_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: thermo2_target_lbl, text: "set --", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+              - label: { id: thermo2_mode_lbl, text: "--", text_font: montserrat_14, text_color: 0xE0C040, align: BOTTOM_RIGHT }
+        - obj:
+            x: 8
+            y: 162
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "PM2.5", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: pm25_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "ug/m3  ok<10", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+        - obj:
+            x: 124
+            y: 162
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "PM10", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: pm10_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "ug/m3  ok<20", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+    - id: page_lights
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Lights" } ]
+      widgets: [ label: { align: CENTER, text: "Lights (Task 6)", text_color: 0xFFFFFF } ]
+    - id: page_server
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Server" } ]
+      widgets: [ label: { align: CENTER, text: "Server (Task 7)", text_color: 0xFFFFFF } ]
+    - id: page_vms
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "VMs" } ]
+      widgets: [ label: { align: CENTER, text: "VMs (Task 7)", text_color: 0xFFFFFF } ]
+    - id: page_storage
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Storage" } ]
+      widgets: [ label: { align: CENTER, text: "Storage (Task 8)", text_color: 0xFFFFFF } ]

@@ -380,19 +380,19 @@ Revised 2026-09-03 after the user supplied their entities: five pages instead of
 - Consumes: `ha_time`, `lcd`, `touch`.
 - Produces: header ids `lbl_time`, `lbl_title`, `lbl_link`; page ids `page_home`, `page_lights`, `page_server`, `page_vms`, `page_storage` (later pages are placeholders until their task); style ids `tile_style`, `row_style`, `nav_style`; the *severity pattern* (an `if` chain colouring a value label green/yellow/red) reused by Tasks 7–8.
 
-- [ ] **Step 1: Substitutions**
+- [x] **Step 1: Substitutions**
 
 ```yaml
   # --- Home page ---
   thermo1_entity: climate.thermostat_14
-  thermo1_name: "Thermostat 14"
+  thermo1_name: "Theo's room"
   thermo2_entity: climate.thermostat_15
-  thermo2_name: "Thermostat 15"
+  thermo2_name: "Living Room"
   pm25_entity: sensor.nova_pm2_5
   pm10_entity: sensor.nova_pm10
 ```
 
-- [ ] **Step 2: Imports**
+- [x] **Step 2: Imports**
 
 Append to `sensor:`:
 
@@ -465,7 +465,7 @@ text_sensor:
       - lvgl.label.update: { id: thermo2_mode_lbl, text: !lambda 'return x;' }
 ```
 
-- [ ] **Step 3: Clock and link state**
+- [x] **Step 3: Clock and link state**
 
 Extend the existing blocks:
 
@@ -489,7 +489,7 @@ api:
     - lvgl.label.update: { id: lbl_link, text: "HA", text_color: 0xE04040 }
 ```
 
-- [ ] **Step 4: Styles, header, navigation and the pages**
+- [x] **Step 4: Styles, header, navigation and the pages**
 
 Replace the whole `pages:` list under `lvgl:` (and add `style_definitions` / `top_layer` beside it):
 
@@ -517,7 +517,7 @@ Replace the whole `pages:` list under `lvgl:` (and add `style_definitions` / `to
       - label: { id: lbl_link, x: 208, y: 8, text: "HA", text_color: 0xE04040 }
       - button:
           x: 8
-          y: 288
+          y: 286
           width: 60
           height: 28
           styles: nav_style
@@ -525,7 +525,7 @@ Replace the whole `pages:` list under `lvgl:` (and add `style_definitions` / `to
           on_click: [ lvgl.page.previous ]
       - button:
           x: 172
-          y: 288
+          y: 286
           width: 60
           height: 28
           styles: nav_style
@@ -616,7 +616,7 @@ Replace the whole `pages:` list under `lvgl:` (and add `style_definitions` / `to
       widgets: [ label: { align: CENTER, text: "Storage (Task 8)", text_color: 0xFFFFFF } ]
 ```
 
-- [ ] **Step 5: Validate, compile, flash; checkpoint (user)**
+- [x] **Step 5: Validate, compile, flash; checkpoint (user)**
 
 ```bash
 esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
@@ -624,7 +624,9 @@ esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 
 Expected: header with clock (within a minute), "Home", green `HA`; two thermostat tiles showing current temperature, `set NN.N` and the mode word, and tapping a tile cycles its mode heat → off → auto (visible in HA within a second); PM tiles coloured by threshold; `<`/`>` cycle through the five pages and the title follows.
 
-- [ ] **Step 6: Commit**
+Result 2026-09-03: passed — values live, HA green, mode cycles from a tap, no overflow. Thermostat names set to "Theo's room" / "Living Room". Build: 1.23 MB flash (15 %), 113 KB RAM (33 %); one-off `lvgl took a long time (110 ms)` at first render.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
