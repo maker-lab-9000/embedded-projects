@@ -4,6 +4,19 @@
 substitutions:
   name: lcd2
   friendly_name: "LCD2 Dashboard"
+  # --- Rooms page (first page): temperature + humidity per room ---
+  room1_name: "Bedroom"
+  room1_temp_entity: sensor.multi_sensor_bedzimmer
+  room1_hum_entity: sensor.multi_sensor_bedzimmer_2
+  room2_name: "Theo's room"
+  room2_temp_entity: sensor.multi_sensor_wohnzimmer
+  room2_hum_entity: sensor.multi_sensor_wohnzimmer_2
+  room3_name: "Bathroom"
+  room3_temp_entity: sensor.temperature_9
+  room3_hum_entity: sensor.humidity_10
+  room4_name: "Living Room"
+  room4_temp_entity: sensor.living_room
+  room4_hum_entity: sensor.living_room_2
   # --- Home page ---
   thermo1_entity: climate.thermostat_14
   thermo1_name: "Theo's room"
@@ -448,6 +461,47 @@ sensor:
     entity_id: ${raid_failed_entity}
     on_value: [ script.execute: update_raid ]
 
+  - platform: homeassistant
+    id: room1_temp
+    entity_id: ${room1_temp_entity}
+    on_value:
+      - lvgl.label.update: { id: room1_temp_lbl, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: room1_hum
+    entity_id: ${room1_hum_entity}
+    on_value:
+      - lvgl.label.update: { id: room1_hum_lbl, text: { format: "%.1f %%", args: [x] } }
+  - platform: homeassistant
+    id: room2_temp
+    entity_id: ${room2_temp_entity}
+    on_value:
+      - lvgl.label.update: { id: room2_temp_lbl, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: room2_hum
+    entity_id: ${room2_hum_entity}
+    on_value:
+      - lvgl.label.update: { id: room2_hum_lbl, text: { format: "%.1f %%", args: [x] } }
+  - platform: homeassistant
+    id: room3_temp
+    entity_id: ${room3_temp_entity}
+    on_value:
+      - lvgl.label.update: { id: room3_temp_lbl, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: room3_hum
+    entity_id: ${room3_hum_entity}
+    on_value:
+      - lvgl.label.update: { id: room3_hum_lbl, text: { format: "%.1f %%", args: [x] } }
+  - platform: homeassistant
+    id: room4_temp
+    entity_id: ${room4_temp_entity}
+    on_value:
+      - lvgl.label.update: { id: room4_temp_lbl, text: { format: "%.1f °C", args: [x] } }
+  - platform: homeassistant
+    id: room4_hum
+    entity_id: ${room4_hum_entity}
+    on_value:
+      - lvgl.label.update: { id: room4_hum_lbl, text: { format: "%.1f %%", args: [x] } }
+
 binary_sensor:
   - platform: homeassistant
     id: philips_state
@@ -600,7 +654,7 @@ lvgl:
   top_layer:
     widgets:
       - label: { id: lbl_time, x: 8, y: 8, text: "--:--", text_color: 0xFFFFFF }
-      - label: { id: lbl_title, align: TOP_MID, y: 8, text: "Home", text_color: 0xA0A8B8 }
+      - label: { id: lbl_title, align: TOP_MID, y: 8, text: "Rooms", text_color: 0xA0A8B8 }
       - label: { id: lbl_link, x: 208, y: 8, text: "HA", text_color: 0xE04040 }
       - button:
           x: 8
@@ -619,6 +673,54 @@ lvgl:
           widgets: [ label: { align: CENTER, text: ">" } ]
           on_click: [ lvgl.page.next ]
   pages:
+    - id: page_rooms
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Rooms" } ]
+      widgets:
+        - obj:
+            x: 8
+            y: 36
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "${room1_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: room1_temp_lbl, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: room1_hum_lbl, text: "--", text_font: montserrat_14, text_color: 0x60A8E0, align: BOTTOM_LEFT }
+              - label: { text: "RH", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_RIGHT }
+        - obj:
+            x: 124
+            y: 36
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "${room2_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: room2_temp_lbl, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: room2_hum_lbl, text: "--", text_font: montserrat_14, text_color: 0x60A8E0, align: BOTTOM_LEFT }
+              - label: { text: "RH", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_RIGHT }
+        - obj:
+            x: 8
+            y: 162
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "${room3_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: room3_temp_lbl, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: room3_hum_lbl, text: "--", text_font: montserrat_14, text_color: 0x60A8E0, align: BOTTOM_LEFT }
+              - label: { text: "RH", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_RIGHT }
+        - obj:
+            x: 124
+            y: 162
+            width: 108
+            height: 118
+            styles: tile_style
+            widgets:
+              - label: { text: "${room4_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: room4_temp_lbl, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: room4_hum_lbl, text: "--", text_font: montserrat_14, text_color: 0x60A8E0, align: BOTTOM_LEFT }
+              - label: { text: "RH", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_RIGHT }
     - id: page_home
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Home" } ]
