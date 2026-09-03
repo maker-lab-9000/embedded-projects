@@ -79,11 +79,11 @@ navigated with `<` / `>` buttons in a bottom bar. Revised 2026-09-03 to the user
 └──────────────────────────┘ y=320
 ```
 
-- **Lights:** six rows — Philips lamp switch; Philips brightness slider (input_number);
-  Tripod lamp switch + Candle toggle; Innr lamp switch; Innr brightness slider; Light-timer
-  toggle with minutes label + Daylight-sync toggle. Switches mirror HA via
-  `homeassistant` binary sensors and call `homeassistant.turn_on/turn_off`; sliders call
-  `input_number.set_value` on release.
+- **Lights:** four cards (Philips, Tripod, Bedroom/Innr, Bedside), each an on/off switch plus a 0–255
+  brightness slider. Switches mirror HA via `homeassistant` binary sensors and call
+  `light.turn_on/turn_off`; sliders call `light.turn_on` with `brightness` on release and
+  follow the light's `brightness` attribute. (Revised 2026-09-03 from a six-row version with
+  helper-driven sliders and timer/daylight toggles.)
 - **Server:** six bar rows (name, value, thin bar): CPU temp, GPU temp, NVMe temp,
   Proxmox CPU/RAM/root disk. Value text coloured by the same yellow/red thresholds as the
   user's HA gauges.

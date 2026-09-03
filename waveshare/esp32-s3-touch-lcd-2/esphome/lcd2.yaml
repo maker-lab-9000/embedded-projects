@@ -11,6 +11,15 @@ substitutions:
   thermo2_name: "Living Room"
   pm25_entity: sensor.nova_pm2_5
   pm10_entity: sensor.nova_pm10
+  # --- Lights page --- (brightness is driven on the light itself, 0-255, not via helpers)
+  philips_entity: light.philips_lamp
+  philips_name: "Philips lamp"
+  tripod_entity: light.extended_color_light_10
+  tripod_name: "Tripod lamp"
+  innr_entity: light.innr1
+  innr_name: "Bedroom Lamp"
+  bedside_entity: light.extended_color_light_1
+  bedside_name: "Bedside Lamp"
 
 esphome:
   name: ${name}
@@ -116,6 +125,65 @@ sensor:
                 condition: { lambda: 'return x < 40;' }
                 then: [ lvgl.label.update: { id: pm10_value, text_color: 0xE0C040 } ]
                 else: [ lvgl.label.update: { id: pm10_value, text_color: 0xE04040 } ]
+
+  - platform: homeassistant
+    id: philips_bright
+    entity_id: ${philips_entity}
+    attribute: brightness             # 0-255; absent while the light is off (no update then)
+    on_value:
+      - lvgl.slider.update: { id: sl_philips, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: tripod_bright
+    entity_id: ${tripod_entity}
+    attribute: brightness             # 0-255; absent while the light is off (no update then)
+    on_value:
+      - lvgl.slider.update: { id: sl_tripod, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: innr_bright
+    entity_id: ${innr_entity}
+    attribute: brightness             # 0-255; absent while the light is off (no update then)
+    on_value:
+      - lvgl.slider.update: { id: sl_innr, value: !lambda 'return x;' }
+  - platform: homeassistant
+    id: bedside_bright
+    entity_id: ${bedside_entity}
+    attribute: brightness
+    on_value:
+      - lvgl.slider.update: { id: sl_bedside, value: !lambda 'return x;' }
+
+binary_sensor:
+  - platform: homeassistant
+    id: philips_state
+    entity_id: ${philips_entity}
+    on_state:
+      - lvgl.widget.update:
+          id: sw_philips
+          state:
+            checked: !lambda 'return x;'
+  - platform: homeassistant
+    id: tripod_state
+    entity_id: ${tripod_entity}
+    on_state:
+      - lvgl.widget.update:
+          id: sw_tripod
+          state:
+            checked: !lambda 'return x;'
+  - platform: homeassistant
+    id: innr_state
+    entity_id: ${innr_entity}
+    on_state:
+      - lvgl.widget.update:
+          id: sw_innr
+          state:
+            checked: !lambda 'return x;'
+  - platform: homeassistant
+    id: bedside_state
+    entity_id: ${bedside_entity}
+    on_state:
+      - lvgl.widget.update:
+          id: sw_bedside
+          state:
+            checked: !lambda 'return x;'
 
 text_sensor:
   - platform: homeassistant
@@ -294,7 +362,171 @@ lvgl:
     - id: page_lights
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Lights" } ]
-      widgets: [ label: { align: CENTER, text: "Lights (Task 6)", text_color: 0xFFFFFF } ]
+      widgets:
+        - obj:
+            x: 8
+            y: 38
+            width: 224
+            height: 58
+            styles: tile_style
+            widgets:
+              - label: { text: "${philips_name}", text_color: 0xFFFFFF, align: TOP_LEFT }
+              - switch:
+                  id: sw_philips
+                  align: TOP_RIGHT
+                  width: 50
+                  height: 24
+                  on_value:
+                    - if:
+                        condition:
+                          lambda: 'return x;'
+                        then:
+                          - homeassistant.action:
+                              action: light.turn_on
+                              data:
+                                entity_id: "${philips_entity}"
+                        else:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "${philips_entity}"
+              - slider:
+                  id: sl_philips
+                  align: BOTTOM_MID
+                  y: -3
+                  width: 200
+                  height: 8
+                  min_value: 0
+                  max_value: 255
+                  on_release:
+                    - homeassistant.action:
+                        action: light.turn_on
+                        data:
+                          entity_id: "${philips_entity}"
+                          brightness: !lambda 'return to_string((int) x);'
+        - obj:
+            x: 8
+            y: 100
+            width: 224
+            height: 58
+            styles: tile_style
+            widgets:
+              - label: { text: "${tripod_name}", text_color: 0xFFFFFF, align: TOP_LEFT }
+              - switch:
+                  id: sw_tripod
+                  align: TOP_RIGHT
+                  width: 50
+                  height: 24
+                  on_value:
+                    - if:
+                        condition:
+                          lambda: 'return x;'
+                        then:
+                          - homeassistant.action:
+                              action: light.turn_on
+                              data:
+                                entity_id: "${tripod_entity}"
+                        else:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "${tripod_entity}"
+              - slider:
+                  id: sl_tripod
+                  align: BOTTOM_MID
+                  y: -3
+                  width: 200
+                  height: 8
+                  min_value: 0
+                  max_value: 255
+                  on_release:
+                    - homeassistant.action:
+                        action: light.turn_on
+                        data:
+                          entity_id: "${tripod_entity}"
+                          brightness: !lambda 'return to_string((int) x);'
+        - obj:
+            x: 8
+            y: 162
+            width: 224
+            height: 58
+            styles: tile_style
+            widgets:
+              - label: { text: "${innr_name}", text_color: 0xFFFFFF, align: TOP_LEFT }
+              - switch:
+                  id: sw_innr
+                  align: TOP_RIGHT
+                  width: 50
+                  height: 24
+                  on_value:
+                    - if:
+                        condition:
+                          lambda: 'return x;'
+                        then:
+                          - homeassistant.action:
+                              action: light.turn_on
+                              data:
+                                entity_id: "${innr_entity}"
+                        else:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "${innr_entity}"
+              - slider:
+                  id: sl_innr
+                  align: BOTTOM_MID
+                  y: -3
+                  width: 200
+                  height: 8
+                  min_value: 0
+                  max_value: 255
+                  on_release:
+                    - homeassistant.action:
+                        action: light.turn_on
+                        data:
+                          entity_id: "${innr_entity}"
+                          brightness: !lambda 'return to_string((int) x);'
+        - obj:
+            x: 8
+            y: 224
+            width: 224
+            height: 58
+            styles: tile_style
+            widgets:
+              - label: { text: "${bedside_name}", text_color: 0xFFFFFF, align: TOP_LEFT }
+              - switch:
+                  id: sw_bedside
+                  align: TOP_RIGHT
+                  width: 50
+                  height: 24
+                  on_value:
+                    - if:
+                        condition:
+                          lambda: 'return x;'
+                        then:
+                          - homeassistant.action:
+                              action: light.turn_on
+                              data:
+                                entity_id: "${bedside_entity}"
+                        else:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "${bedside_entity}"
+              - slider:
+                  id: sl_bedside
+                  align: BOTTOM_MID
+                  y: -3
+                  width: 200
+                  height: 8
+                  min_value: 0
+                  max_value: 255
+                  on_release:
+                    - homeassistant.action:
+                        action: light.turn_on
+                        data:
+                          entity_id: "${bedside_entity}"
+                          brightness: !lambda 'return to_string((int) x);'
     - id: page_server
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Server" } ]

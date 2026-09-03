@@ -635,209 +635,119 @@ git commit -m "waveshare: header, page navigation, Home page with thermostats an
 
 ---
 
-### Task 6: Lights page — lamps, brightness sliders, timers
+### Task 6: Lights page — four lamps, each with an on/off switch and a 0–255 brightness slider
+
+Revised 2026-09-03 after the first version was on the panel: the user wants only the three lamps with toggle + brightness. Brightness is driven on the light entity itself (`light.turn_on` with `brightness: 0–255`) and read back from the light's `brightness` attribute, so it does not depend on the `input_number` helpers' ranges.
 
 **Files:**
 - Modify: `esphome/lcd2.yaml` — `substitutions:`, `binary_sensor:` + `sensor:` imports, `page_lights` widgets
 
 **Interfaces:**
-- Consumes: `row_style`, HA setting "Allow the device to perform Home Assistant actions".
-- Produces: switch ids `sw_philips`, `sw_tripod`, `sw_candle`, `sw_innr`, `sw_timer`, `sw_daylight`; slider ids `sl_bright1`, `sl_bright2`; label `lbl_timer_min`.
+- Consumes: `tile_style`, HA setting "Allow the device to perform Home Assistant actions".
+- Produces: switch ids `sw_philips`, `sw_tripod`, `sw_innr`, `sw_bedside`; slider ids `sl_philips`, `sl_tripod`, `sl_innr`, `sl_bedside`.
 
-- [ ] **Step 1: Substitutions**
+- [x] **Step 1: Substitutions**
 
 ```yaml
-  # --- Lights page ---
+  # --- Lights page --- (brightness is driven on the light itself, 0-255, not via helpers)
   philips_entity: light.philips_lamp
-  philips_bright_entity: input_number.brightness
+  philips_name: "Philips lamp"
   tripod_entity: light.extended_color_light_10
-  candle_entity: input_boolean.light_timer_enabled44
+  tripod_name: "Tripod lamp"
   innr_entity: light.innr1
-  innr_bright_entity: input_number.brightness1
-  timer_entity: input_boolean.light_timer_enabled
-  timer_min_entity: input_number.light_timer_minutes
-  daylight_entity: input_boolean.philips_lamp_daylight_sync
-  bright_max: "100"      # max of the input_number helpers; change to 255 if that is how they are defined
+  innr_name: "Bedroom Lamp"
+  bedside_entity: light.extended_color_light_1
+  bedside_name: "Bedside Lamp"
 ```
 
-- [ ] **Step 2: State feedback**
+- [x] **Step 2: State feedback**
 
-New top-level block (one entry per switch; six in total, same shape):
+One `binary_sensor` (on/off → switch) and one `sensor` (brightness attribute → slider) per lamp; the Philips pair is shown, the other two are identical with `tripod` / `innr`:
 
 ```yaml
 binary_sensor:
   - platform: homeassistant
     id: philips_state
     entity_id: ${philips_entity}
-    on_state: [ lvgl.widget.update: { id: sw_philips, state: { checked: !lambda 'return x;' } } ]
-  - platform: homeassistant
-    id: tripod_state
-    entity_id: ${tripod_entity}
-    on_state: [ lvgl.widget.update: { id: sw_tripod, state: { checked: !lambda 'return x;' } } ]
-  - platform: homeassistant
-    id: candle_state
-    entity_id: ${candle_entity}
-    on_state: [ lvgl.widget.update: { id: sw_candle, state: { checked: !lambda 'return x;' } } ]
-  - platform: homeassistant
-    id: innr_state
-    entity_id: ${innr_entity}
-    on_state: [ lvgl.widget.update: { id: sw_innr, state: { checked: !lambda 'return x;' } } ]
-  - platform: homeassistant
-    id: timer_state
-    entity_id: ${timer_entity}
-    on_state: [ lvgl.widget.update: { id: sw_timer, state: { checked: !lambda 'return x;' } } ]
-  - platform: homeassistant
-    id: daylight_state
-    entity_id: ${daylight_entity}
-    on_state: [ lvgl.widget.update: { id: sw_daylight, state: { checked: !lambda 'return x;' } } ]
+    on_state:
+      - lvgl.widget.update:
+          id: sw_philips
+          state:
+            checked: !lambda 'return x;'
 ```
-
-Append to `sensor:`:
 
 ```yaml
   - platform: homeassistant
     id: philips_bright
-    entity_id: ${philips_bright_entity}
-    on_value: [ lvgl.slider.update: { id: sl_bright1, value: !lambda 'return x;' } ]
-  - platform: homeassistant
-    id: innr_bright
-    entity_id: ${innr_bright_entity}
-    on_value: [ lvgl.slider.update: { id: sl_bright2, value: !lambda 'return x;' } ]
-  - platform: homeassistant
-    id: timer_min
-    entity_id: ${timer_min_entity}
-    on_value: [ lvgl.label.update: { id: lbl_timer_min, text: { format: "%.0f min", args: [x] } } ]
+    entity_id: ${philips_entity}
+    attribute: brightness             # 0-255; absent while the light is off (no update then)
+    on_value:
+      - lvgl.slider.update: { id: sl_philips, value: !lambda 'return x;' }
 ```
 
-- [ ] **Step 3: The page**
+- [x] **Step 3: The page**
 
-Replace the `page_lights` placeholder. Rows are 38 px tall at y = 38, 79, 120, 161, 202, 243. The switch block is shown once (Philips); the other five switches are identical with their own ids and entities. `homeassistant.turn_on/turn_off` serve lights and input_booleans alike.
+Four cards of 58 px at y = 38, 100, 162, 224 (name top-left, switch top-right, slider along the bottom). One card shown; the others differ only in ids and substitutions. (Bedside lamp added 2026-09-03; Innr renamed "Bedroom Lamp".)
 
 ```yaml
     - id: page_lights
       bg_color: 0x000000
       on_load: [ lvgl.label.update: { id: lbl_title, text: "Lights" } ]
       widgets:
-        - obj:                                  # row 1: Philips lamp on/off
+        - obj:
             x: 8
             y: 38
             width: 224
-            height: 38
-            styles: row_style
+            height: 58
+            styles: tile_style
             widgets:
-              - label: { text: "Philips lamp", text_color: 0xFFFFFF, align: LEFT_MID }
+              - label: { text: "${philips_name}", text_color: 0xFFFFFF, align: TOP_LEFT }
               - switch:
                   id: sw_philips
-                  align: RIGHT_MID
+                  align: TOP_RIGHT
                   width: 50
-                  height: 26
+                  height: 24
                   on_value:
                     - if:
-                        condition: { lambda: 'return x;' }
-                        then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${philips_entity}" } } ]
-                        else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${philips_entity}" } } ]
-        - obj:                                  # row 2: Philips brightness
-            x: 8
-            y: 79
-            width: 224
-            height: 38
-            styles: row_style
-            widgets:
-              - label: { text: "Bright", text_font: montserrat_14, text_color: 0xA0A8B8, align: LEFT_MID }
+                        condition:
+                          lambda: 'return x;'
+                        then:
+                          - homeassistant.action:
+                              action: light.turn_on
+                              data:
+                                entity_id: "${philips_entity}"
+                        else:
+                          - homeassistant.action:
+                              action: light.turn_off
+                              data:
+                                entity_id: "${philips_entity}"
               - slider:
-                  id: sl_bright1
-                  x: 60
-                  align: LEFT_MID
-                  width: 150
-                  height: 10
+                  id: sl_philips
+                  align: BOTTOM_MID
+                  y: -3
+                  width: 200
+                  height: 8
                   min_value: 0
-                  max_value: ${bright_max}
+                  max_value: 255
                   on_release:
                     - homeassistant.action:
-                        action: input_number.set_value
+                        action: light.turn_on
                         data:
-                          entity_id: "${philips_bright_entity}"
-                          value: !lambda 'return to_string((int) x);'
-        - obj:                                  # row 3: Tripod lamp + candle
-            x: 8
-            y: 120
-            width: 224
-            height: 38
-            styles: row_style
-            widgets:
-              - label: { text: "Tripod", text_color: 0xFFFFFF, align: LEFT_MID }
-              - switch: { id: sw_tripod, x: 66, align: LEFT_MID, width: 50, height: 26,
-                          on_value: [ if: { condition: { lambda: 'return x;' },
-                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${tripod_entity}" } } ],
-                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${tripod_entity}" } } ] } ] }
-              - label: { text: "Candle", text_font: montserrat_14, text_color: 0xA0A8B8, x: -58, align: RIGHT_MID }
-              - switch: { id: sw_candle, align: RIGHT_MID, width: 50, height: 26,
-                          on_value: [ if: { condition: { lambda: 'return x;' },
-                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${candle_entity}" } } ],
-                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${candle_entity}" } } ] } ] }
-        - obj:                                  # row 4: Innr lamp on/off
-            x: 8
-            y: 161
-            width: 224
-            height: 38
-            styles: row_style
-            widgets:
-              - label: { text: "Innr lamp", text_color: 0xFFFFFF, align: LEFT_MID }
-              - switch: { id: sw_innr, align: RIGHT_MID, width: 50, height: 26,
-                          on_value: [ if: { condition: { lambda: 'return x;' },
-                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${innr_entity}" } } ],
-                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${innr_entity}" } } ] } ] }
-        - obj:                                  # row 5: Innr brightness
-            x: 8
-            y: 202
-            width: 224
-            height: 38
-            styles: row_style
-            widgets:
-              - label: { text: "Bright", text_font: montserrat_14, text_color: 0xA0A8B8, align: LEFT_MID }
-              - slider:
-                  id: sl_bright2
-                  x: 60
-                  align: LEFT_MID
-                  width: 150
-                  height: 10
-                  min_value: 0
-                  max_value: ${bright_max}
-                  on_release:
-                    - homeassistant.action:
-                        action: input_number.set_value
-                        data:
-                          entity_id: "${innr_bright_entity}"
-                          value: !lambda 'return to_string((int) x);'
-        - obj:                                  # row 6: light timer + daylight sync
-            x: 8
-            y: 243
-            width: 224
-            height: 38
-            styles: row_style
-            widgets:
-              - label: { text: "Timer", text_color: 0xFFFFFF, align: LEFT_MID }
-              - switch: { id: sw_timer, x: 52, align: LEFT_MID, width: 50, height: 26,
-                          on_value: [ if: { condition: { lambda: 'return x;' },
-                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${timer_entity}" } } ],
-                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${timer_entity}" } } ] } ] }
-              - label: { id: lbl_timer_min, text: "-- min", text_font: montserrat_14, text_color: 0xA0A8B8, x: 108, align: LEFT_MID }
-              - label: { text: "Day", text_font: montserrat_14, text_color: 0xA0A8B8, x: -56, align: RIGHT_MID }
-              - switch: { id: sw_daylight, align: RIGHT_MID, width: 50, height: 26,
-                          on_value: [ if: { condition: { lambda: 'return x;' },
-                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${daylight_entity}" } } ],
-                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${daylight_entity}" } } ] } ] }
+                          entity_id: "${philips_entity}"
+                          brightness: !lambda 'return to_string((int) x);'
 ```
 
-- [ ] **Step 4: Validate, compile, flash; checkpoint (user)**
+- [x] **Step 4: Validate, compile, flash; checkpoint (user)**
 
-Expected: switches show the current HA states at boot; flipping one toggles the real lamp/helper within a second and toggling from HA moves the panel's switch; dragging a brightness slider and releasing sets the input_number (watch it in HA). If the sliders sit at the wrong end, the helpers use 0–255: set `bright_max: "255"`. If nothing toggles and the log shows no action call, enable "Allow the device to perform Home Assistant actions" (Task 2 checkpoint).
+Expected: each switch shows the current state at boot and follows changes made in HA; flipping toggles the lamp within a second; dragging a slider and releasing sets the lamp's brightness (the HA light card shows the new level); the slider follows brightness changes made in HA. A slider does not move while its lamp is off (HA reports no brightness then).
 
-- [ ] **Step 5: Commit**
+First version (six rows incl. candle, timer and daylight toggles and helper-driven sliders) was flashed and worked, then replaced at the user's request. Four-lamp version confirmed on 2026-09-03: states, toggles and 0–255 sliders all working, nothing clipped.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
-git commit -m "waveshare: Lights page with lamp switches, brightness sliders and timer toggles"
+git commit -m "waveshare: Lights page with four lamps, on/off and 0-255 brightness"
 ```
 
 ---
