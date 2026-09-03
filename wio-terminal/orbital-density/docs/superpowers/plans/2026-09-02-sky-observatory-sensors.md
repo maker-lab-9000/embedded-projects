@@ -29,6 +29,7 @@
 ```
 wio-terminal/orbital-density/
   firmware/m1_i2c_scan/m1_i2c_scan.ino      Task 1  bus scan with device names + Serial1 NMEA count (confirms the chassis UART socket)
+  firmware/m1_pinsweep/m1_pinsweep.ino       Task 1  header-pin edge counter: which header pin is a chassis-socket signal on?
   firmware/m1_tsl2591/tsl2591.h              Task 2  register-level non-blocking TSL2591 driver (authored here)
   firmware/m1_tsl2591/m1_tsl2591.ino         Task 2  serial bring-up
   firmware/m1_mmc5603/m1_mmc5603.ino         Task 3  serial bring-up, continuous mode, read-time measurement
@@ -54,11 +55,12 @@ Line numbers below refer to `m2_skyview.ino` **as of commit `e1c0557`** (1258 li
 
 **Files:**
 - Create: `wio-terminal/orbital-density/firmware/m1_i2c_scan/m1_i2c_scan.ino`
+- Create: `wio-terminal/orbital-density/firmware/m1_pinsweep/m1_pinsweep.ino` (diagnostic, see Step 4)
 
 **Interfaces:**
 - Produces: confirmation that all four devices answer on `Wire` at 100 kHz, that the Air530Z is heard on `Serial1` through the chassis UART socket, and the Adafruit MMC56x3 library installed for Tasks 3 and 8.
 
-- [ ] **Step 1: Install the magnetometer library**
+- [x] **Step 1: Install the magnetometer library**
 
 ```bash
 arduino-cli lib install "Adafruit MMC56x3"
@@ -67,7 +69,7 @@ arduino-cli lib list | grep -E "MMC56x3|BusIO|Unified Sensor"
 
 Expected: three lines, one per library (BusIO and Unified Sensor were already present). The MLX90614 library is installed in the deferred Task 4.
 
-- [ ] **Step 2: Write the scanner sketch**
+- [x] **Step 2: Write the scanner sketch**
 
 Create `wio-terminal/orbital-density/firmware/m1_i2c_scan/m1_i2c_scan.ino`:
 
@@ -75,7 +77,8 @@ Create `wio-terminal/orbital-density/firmware/m1_i2c_scan/m1_i2c_scan.ino`:
 // Milestone 1 — I2C bus scan + GNSS UART check for the sky-observatory re-cabling.
 //
 // WIRING (Wio Terminal in the 650 mAh battery chassis):
-//   chassis Grove UART socket -> Grove cable -> Air530Z GNSS   (= header pins 8/10 = Serial1)
+//   chassis socket labelled RX TX (beside the USB-C) -> Grove cable -> Air530Z GNSS  (= header 10/8 = Serial1)
+//   the four IO* sockets look identical but have no UART: a GPS there is silent on Serial1
 //   chassis Grove I2C socket  -> spare (GY-906 / MLX90614 goes here once its header is soldered)
 //   LEFT Grove port (SDA/SCL) -> Grove cable -> Grove I2C Hub (passive, 4 sockets in parallel)
 //     hub socket -> Grove cable -> BME280
@@ -88,7 +91,30 @@ Create `wio-terminal/orbital-density/firmware/m1_i2c_scan/m1_i2c_scan.ino`:
 
 #include <Wire.h>
 
-uint32_t nmeaCount = 0;   // '$' characters seen on Serial1 since the last report
+uint32_t nmeaCount = 0, byteCount = 0;   // '$' chars / all bytes seen on Serial1 since the last report
+char     peek[61]; uint8_t peekLen = 0;  // first printable chars of the period, to eyeball NMEA vs garbage
+uint32_t gpsBaud = 115200, gpsProbeStart = 0, gpsSwitches = 0;
+bool     gpsSawNmea = false;
+
+void gpsSetBaud(uint32_t b) { Serial1.begin(b); gpsBaud = b; gpsProbeStart = millis(); gpsSawNmea = false; }
+
+// Called every loop(): if nothing valid arrives for 2.5 s, try the other baud. When NMEA shows
+// up at 9600, send $PCAS01,5 (module -> 115200) and re-listen at 115200; count the attempts.
+void gpsAutoBaud() {
+  if (gpsSawNmea && gpsBaud == 9600) {
+    Serial1.println("$PCAS01,5*19");
+    Serial1.flush();
+    delay(100);
+    gpsSwitches++;
+    Serial.printf("GPS: NMEA seen at 9600 -> sent $PCAS01,5 (attempt %lu), listening at 115200\n", (unsigned long)gpsSwitches);
+    gpsSetBaud(115200);
+    return;
+  }
+  if (!gpsSawNmea && millis() - gpsProbeStart > 2500) {
+    gpsSetBaud(gpsBaud == 115200 ? 9600 : 115200);
+    Serial.printf("GPS: nothing valid, now listening at %lu\n", (unsigned long)gpsBaud);
+  }
+}
 
 const char* nameFor(uint8_t a) {
   switch (a) {
@@ -120,30 +146,35 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000);   // MLX90614 is SMBus: 100 kHz max for the whole bus
 
-  // Air530Z on the chassis UART socket = Serial1. Same handshake as m2_skyview: the module
-  // boots at 9600 unless it persisted 115200; the 9600 command is harmless garbage then.
-  Serial1.begin(9600);
-  delay(500);
-  Serial1.println("$PCAS01,5*19");   // module baud -> 115200
-  delay(200);
-  Serial1.begin(115200);
+  // Air530Z on the chassis UART socket = Serial1. Auto-baud (see gpsSetBaud): the module
+  // boots at 9600 unless it persisted 115200, and the SAMD core DROPS bytes with framing
+  // errors, so listening at the wrong baud looks like "0 bytes", not garbage.
+  gpsSetBaud(115200);
 }
 
 void loop() {
   static uint32_t lastReport = 0;
-  while (Serial1.available()) { if (Serial1.read() == '$') nmeaCount++; }
+  while (Serial1.available()) {
+    char c = Serial1.read(); byteCount++;
+    if (c == '$') { nmeaCount++; gpsSawNmea = true; }
+    if (peekLen < 60 && c >= 32 && c < 127) peek[peekLen++] = c;
+  }
+  gpsAutoBaud();
   if (millis() - lastReport >= 5000) {
     lastReport = millis();
     i2cScan();
-    Serial.printf("GPS on Serial1: %lu NMEA sentences in the last 5 s%s\n",
-                  (unsigned long)nmeaCount,
-                  nmeaCount ? "" : "   <-- none: check the chassis UART socket / Grove cable");
-    nmeaCount = 0;
+    peek[peekLen] = 0;
+    Serial.printf("GPS on Serial1 @%lu: %lu bytes, %lu '$' in 5 s", (unsigned long)gpsBaud, (unsigned long)byteCount, (unsigned long)nmeaCount);
+    if (byteCount == 0)      Serial.print("  <-- nothing: UART socket / cable / GPS power");
+    else if (nmeaCount == 0) Serial.print("  <-- bytes but no '$': baud mismatch");
+    Serial.println();
+    if (peekLen) { Serial.print("  first chars: "); Serial.println(peek); }
+    nmeaCount = byteCount = 0; peekLen = 0;
   }
 }
 ```
 
-- [ ] **Step 3: Compile**
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m1_i2c_scan
@@ -151,12 +182,13 @@ arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbita
 
 Expected: `Sketch uses ... bytes` with no errors.
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
-Ask the user to re-cable as in the sketch header: Air530Z → chassis Grove UART socket (unplug the jumper wires from header pins 8/10); hub → LEFT Grove port; BME280, TSL2591 and MMC5603 on the three remaining hub sockets (the chassis I²C socket stays empty for the GY-906 later). Upload; open a serial monitor at 115200.
+Ask the user to re-cable as in the sketch header: Air530Z → the chassis socket labelled **`RX TX`** on the back of the chassis, beside the USB-C (unplug the jumper wires from header pins 8/10; the four `IO*` sockets look identical and are not UARTs); hub → LEFT Grove port; BME280, TSL2591 and MMC5603 on the three remaining hub sockets (the chassis I²C socket stays empty for the GY-906 later). Upload; open a serial monitor at 115200.
 
 Expected every 5 s: the scan lists `0x29`, `0x30`, `0x55`, `0x77`, and `GPS on Serial1:` reports a non-zero count (typically dozens of sentences per 5 s once the module runs at 115200; single digits at 9600 are still a pass). If something is missing:
-- `GPS on Serial1: 0`: the Grove cable sits in one of the chassis A/D sockets instead of the UART socket, or the module has no power (check its LED). Fallback: the old header jumper wiring (README) still works;
+- `GPS on Serial1: 0 bytes`: the Grove cable sits in an `IO*` socket instead of `RX TX`, or the module has no power (check its LED). To prove which, flash `firmware/m1_pinsweep` (Step 4a): edges on header pin 13/15/16/18/22/32/33/37 mean the GPS is in an `IO*` socket. Fallback: the old header jumper wiring (README) still works;
+- `GPS on Serial1: N bytes, 0 '$'`: baud mismatch; power-cycle the module and re-run;
 - none of the hub devices: uplink cable in the wrong Grove port (use the LEFT one), or a Grove cable seated one pin off;
 - `0x77` missing: BME280 Grove cable not seated in its hub socket;
 - `0x30` only missing: its Grove-to-QT cable, or the QT-to-QT cable if chained from the TSL2591;
@@ -164,11 +196,15 @@ Expected every 5 s: the scan lists `0x29`, `0x30`, `0x55`, `0x77`, and `GPS on S
 
 Do not continue until all four addresses and a non-zero GPS count appear together.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 4a (only if the GPS count is zero): header pin sweep**
+
+`firmware/m1_pinsweep/m1_pinsweep.ino` sets every 40-pin-header GPIO to INPUT and counts edges for 1 s, every 3 s. A UART TX line carrying NMEA shows hundreds to thousands of edges in 1 Hz bursts. Flash it, read the reported header pin, and match it against the chassis socket table in the spec (§2.1). Then re-flash `m1_i2c_scan`.
+
+- [x] **Step 5: Commit**
 
 ```bash
-git add wio-terminal/orbital-density/firmware/m1_i2c_scan
-git commit -m "orbital-density: add hub scan + GNSS UART check bring-up sketch"
+git add wio-terminal/orbital-density/firmware/m1_i2c_scan wio-terminal/orbital-density/firmware/m1_pinsweep
+git commit -m "orbital-density: add hub scan, GNSS UART check and header pin-sweep bring-up sketches"
 ```
 
 ---
@@ -1637,9 +1673,11 @@ In the Hardware list add three bullets after the BME280 line:
 Rewrite the GNSS wiring section. Change its heading to `### GNSS wiring — chassis Grove UART socket (= Serial1)` and put this text before the existing header-pin table (keep the table and the D0/D1 warning below it as the fallback):
 
 ```markdown
-The Air530Z plugs into the **battery chassis Grove UART socket** with a plain Grove cable.
-That socket is fed from header pins 8/10 (TXD/RXD), i.e. `Serial1` — the same UART the
-firmware has always used, so nothing changes in code. Verified by the NMEA count printed
+The Air530Z plugs into the battery-chassis socket labelled **`RX TX`** (bottom edge, beside the
+USB-C; labels are on the back of the chassis) with a plain Grove cable. Per Seeed's schematic that
+socket is header pins 10/8 (RXD/TXD), i.e. `Serial1` — the same UART the firmware has always used,
+so nothing changes in code. ⚠️ The four `IO*` sockets look identical and are plain GPIO: a GPS
+plugged into one of them is silent (`firmware/m1_pinsweep` finds where its TX line really lands). Verified by the NMEA count printed
 by `firmware/m1_i2c_scan`. Without the chassis, jumper-wire the module to the header:
 ```
 

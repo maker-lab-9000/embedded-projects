@@ -38,6 +38,22 @@ Grove sockets fed from the 40-pin header: one I²C (same `Wire` bus), one UART
 The Grove I²C Hub is passive: its four sockets are wired in parallel, one is the
 uplink, three take devices: BME280, TSL2591, MMC5603.
 
+Chassis socket labels (silkscreen on the back of the chassis board) and what they reach,
+from Seeed's schematic (`WioTerminal_battry_650mAh.rar`, Eagle refs in brackets):
+
+| Label on the chassis | Grove pin 1 / pin 2 | Header pins | Arduino names |
+|---|---|---:|---|
+| `RX TX` (bottom edge, beside the USB-C) [J5] | UART1_RXD / UART1_TXD | 10 / 8 | `Serial1` RX / TX |
+| `SCL SDA` (bottom edge, other side of the USB-C) [J6] | I2C1_SCL / I2C1_SDA | 5 / 3 | `Wire` SCL / SDA |
+| `IO0 IO1` (side) [J1] | D0/A0, D1/A1 | 13 / 15 | `D0`, `D1` |
+| `IO2 IO3` (side) [J3] | D2/A2, D3/A3 | 16 / 18 | `D2`, `D3` |
+| `IO4 IO5` (side) [J4] | D4/A4, D5/A5 | 22 / 32 | `D4`, `D5` |
+| `IO6 IO8` (side) [J2] | D6/A6, D8/A8 | 33 / 37 | `D6`, `D8` |
+
+All six sockets look identical; only the label differs. The `IO*` pins have no SERCOM,
+so a UART module in one of them is silent on `Serial1`. This happened on 2026-09-03 (GPS
+in `IO4 IO5`); `firmware/m1_pinsweep` found its TX toggling on header pin 22 within seconds.
+
 ```
                  Wio Terminal + 650 mAh battery chassis
                  ┌────────────────────────────────────────────────────┐
@@ -68,8 +84,9 @@ does not care.
 The Air530Z keeps talking to `Serial1` (SERCOM2, PB26/PB27 = header pins 8/10);
 no firmware change. Physically it moves from jumper wires on the header to the
 chassis Grove UART socket, which is fed from those same header pins because the
-header has exactly one UART. Confirmed at the Task 1 checkpoint by counting NMEA
-sentences. The old jumper wiring stays documented as a fallback.
+header has exactly one UART. Confirmed from the chassis schematic (J5 → UART1_RXD/TXD →
+header 10/8) and by the Task 1 sentence count. The old jumper wiring stays documented as
+a fallback.
 
 The right Grove port (D0/D1 = PB08/PB09) is not an option for this firmware,
 for three stacked reasons: the core declares those pins `PIO_ANALOG`, so a
@@ -238,8 +255,8 @@ press still toggles the backlight. Up/down are reserved for a later
 `#define DUST_ENABLED 0` at the top of the sketch compiles out `pollDust()`,
 the Dust page and the dust history. With the sensor unplugged the D0 input
 floats and would log garbage; with the define off it logs empty fields in
-`/gps.csv`. Flip to `1` to restore the current behaviour. When the sensor returns it goes on one
-of the chassis analog/digital sockets; find that socket's `D` pin and update `DUST_PIN`.
+`/gps.csv`. Flip to `1` to restore the current behaviour. When the sensor returns it goes in the
+chassis `IO0 IO1` socket, whose pin 1 is `D0`, so `DUST_PIN` stays as it is.
 
 ### 4.7 MLX90614 gate (deferred sensor)
 
@@ -318,6 +335,7 @@ Following the existing `firmware/m1_*` convention, one serial-only sketch per
 new device plus a bus scanner:
 
 - `firmware/m1_i2c_scan/` – scan and print every 5 s (promoted from `m1_bme280`'s `i2cScan()`), plus a count of NMEA sentences arriving on `Serial1`, which confirms the chassis UART socket in the same run.
+- `firmware/m1_pinsweep/` – counts edges on every 40-pin-header GPIO for 1 s; tells which header pin a chassis-socket signal actually lands on (found the mis-socketed GPS).
 - `firmware/m1_tsl2591/` – register driver, prints raw CH0/CH1, gain, integration, lux at 1 Hz.
 - `firmware/m1_mmc5603/` – continuous-mode library read, prints X/Y/Z/|B|/heading at 2 Hz.
 - `firmware/m1_mlx90614/` – prints ambient, object, delta at 1 Hz (deferred until the GY-906 is soldered).
