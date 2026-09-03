@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An ESPHome firmware for the Waveshare ESP32-S3-Touch-LCD-2 that shows four Home Assistant values and toggles four Home Assistant devices from an LVGL touch UI, over the HA native API.
+**Goal:** An ESPHome firmware for the Waveshare ESP32-S3-Touch-LCD-2 that shows the user's Home Assistant climate, air-quality and homelab metrics on five LVGL pages and controls their lamps, over the HA native API.
 
 **Architecture:** One ESPHome YAML (`esphome/lcd2.yaml`) grown task by task: base connectivity, display, touch + LVGL, data tiles, controls, idle/battery. HA entity IDs live in `substitutions:`. Values arrive via `homeassistant` sensor/binary_sensor imports; control goes out via `homeassistant.action`. esp-idf framework, octal PSRAM, `mipi_spi` display, `cst816` touch.
 
@@ -155,7 +155,7 @@ ls /dev/cu.usbmodem*
 esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml --device /dev/cu.usbmodemXXXX
 ```
 
-Expected: upload, reset, then log lines `[wifi] ... Connected` and `[api] ... Address: lcd2.local`. In Home Assistant, Settings → Devices & services shows "Discovered: lcd2" → Configure → paste `api_encryption_key`. Then open the ESPHome integration entry for the device → **enable "Allow the device to perform Home Assistant actions"** (needed from Task 6 on). The `WiFi Signal` sensor appears in HA.
+Expected: upload, reset, then log lines `[wifi] ... Connected` and `[api] ... Address: lcd2.local`. In Home Assistant, Settings → Devices & services shows "Discovered: lcd2" → Configure → paste `api_encryption_key`. Then open the ESPHome integration entry for the device → **enable "Allow the device to perform Home Assistant actions"** (needed from Task 5 on for thermostat mode taps and Task 6 for switches). The `WiFi Signal` sensor appears in HA.
 
 - [ ] **Step 4: Commit**
 
@@ -361,75 +361,100 @@ git commit -m "waveshare: CST816 touch and LVGL test page"
 
 ---
 
-### Task 5: Data tiles page with live Home Assistant values
+### Task 5: Header, navigation and the Home page (climate + air quality)
+
+Revised 2026-09-03 after the user supplied their entities: five pages instead of two, navigated with `<` / `>` buttons, page title in the header. Pages: Home (thermostats + PM), Lights, Server, VMs, Storage.
 
 **Files:**
-- Modify: `esphome/lcd2.yaml` — `substitutions:` (tile entities), `sensor:` imports, replace `page_test` with `page_home`, add header and nav bar
+- Modify: `esphome/lcd2.yaml` — `substitutions:`, `sensor:`/`text_sensor:` imports, `lvgl:` (style_definitions, top_layer, pages)
 
 **Interfaces:**
 - Consumes: `ha_time`, `lcd`, `touch`.
-- Produces: LVGL ids `lbl_time`, `lbl_link`, `tile1_value`..`tile4_value`, `page_home`, `page_controls` (placeholder until Task 6), `nav_bar` pattern.
+- Produces: header ids `lbl_time`, `lbl_title`, `lbl_link`; page ids `page_home`, `page_lights`, `page_server`, `page_vms`, `page_storage` (later pages are placeholders until their task); style ids `tile_style`, `row_style`, `nav_style`; the *severity pattern* (an `if` chain colouring a value label green/yellow/red) reused by Tasks 7–8.
 
 - [ ] **Step 1: Substitutions**
 
-Add under `substitutions:` (the user replaces the example entity IDs with real ones; formats are printf with the unit baked in):
-
 ```yaml
-  tile1_entity: sensor.living_room_temperature
-  tile1_name: "Living"
-  tile1_format: "%.1f °C"
-  tile2_entity: sensor.outdoor_temperature
-  tile2_name: "Outside"
-  tile2_format: "%.1f °C"
-  tile3_entity: sensor.house_power
-  tile3_name: "Power"
-  tile3_format: "%.0f W"
-  tile4_entity: sensor.living_room_humidity
-  tile4_name: "Humidity"
-  tile4_format: "%.0f %%"
+  # --- Home page ---
+  thermo1_entity: climate.thermostat_14
+  thermo1_name: "Thermostat 14"
+  thermo2_entity: climate.thermostat_15
+  thermo2_name: "Thermostat 15"
+  pm25_entity: sensor.nova_pm2_5
+  pm10_entity: sensor.nova_pm10
 ```
 
-- [ ] **Step 2: Import the four sensors**
+- [ ] **Step 2: Imports**
 
-Append to the existing `sensor:` list (below `wifi_signal`):
+Append to `sensor:`:
 
 ```yaml
   - platform: homeassistant
-    id: tile1
-    entity_id: ${tile1_entity}
+    id: thermo1_current
+    entity_id: ${thermo1_entity}
+    attribute: current_temperature
     on_value:
-      - lvgl.label.update:
-          id: tile1_value
-          text:
-            format: "${tile1_format}"
-            args: [x]
+      - lvgl.label.update: { id: thermo1_value, text: { format: "%.1f °C", args: [x] } }
   - platform: homeassistant
-    id: tile2
-    entity_id: ${tile2_entity}
+    id: thermo1_target
+    entity_id: ${thermo1_entity}
+    attribute: temperature
     on_value:
-      - lvgl.label.update:
-          id: tile2_value
-          text:
-            format: "${tile2_format}"
-            args: [x]
+      - lvgl.label.update: { id: thermo1_target_lbl, text: { format: "set %.1f", args: [x] } }
   - platform: homeassistant
-    id: tile3
-    entity_id: ${tile3_entity}
+    id: thermo2_current
+    entity_id: ${thermo2_entity}
+    attribute: current_temperature
     on_value:
-      - lvgl.label.update:
-          id: tile3_value
-          text:
-            format: "${tile3_format}"
-            args: [x]
+      - lvgl.label.update: { id: thermo2_value, text: { format: "%.1f °C", args: [x] } }
   - platform: homeassistant
-    id: tile4
-    entity_id: ${tile4_entity}
+    id: thermo2_target
+    entity_id: ${thermo2_entity}
+    attribute: temperature
     on_value:
-      - lvgl.label.update:
-          id: tile4_value
-          text:
-            format: "${tile4_format}"
-            args: [x]
+      - lvgl.label.update: { id: thermo2_target_lbl, text: { format: "set %.1f", args: [x] } }
+  - platform: homeassistant
+    id: pm25
+    entity_id: ${pm25_entity}
+    on_value:
+      - lvgl.label.update: { id: pm25_value, text: { format: "%.0f", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 10;' }
+          then: [ lvgl.label.update: { id: pm25_value, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 20;' }
+                then: [ lvgl.label.update: { id: pm25_value, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: pm25_value, text_color: 0xE04040 } ]
+  - platform: homeassistant
+    id: pm10
+    entity_id: ${pm10_entity}
+    on_value:
+      - lvgl.label.update: { id: pm10_value, text: { format: "%.0f", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 20;' }
+          then: [ lvgl.label.update: { id: pm10_value, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 40;' }
+                then: [ lvgl.label.update: { id: pm10_value, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: pm10_value, text_color: 0xE04040 } ]
+```
+
+Add a new top-level block:
+
+```yaml
+text_sensor:
+  - platform: homeassistant
+    id: thermo1_mode
+    entity_id: ${thermo1_entity}
+    on_value:
+      - lvgl.label.update: { id: thermo1_mode_lbl, text: !lambda 'return x;' }
+  - platform: homeassistant
+    id: thermo2_mode
+    entity_id: ${thermo2_entity}
+    on_value:
+      - lvgl.label.update: { id: thermo2_mode_lbl, text: !lambda 'return x;' }
 ```
 
 - [ ] **Step 3: Clock and link state**
@@ -451,20 +476,14 @@ api:
   encryption:
     key: !secret api_encryption_key
   on_client_connected:
-    - lvgl.label.update:
-        id: lbl_link
-        text: "HA ●"
-        text_color: 0x40C040
+    - lvgl.label.update: { id: lbl_link, text: "HA", text_color: 0x40C040 }
   on_client_disconnected:
-    - lvgl.label.update:
-        id: lbl_link
-        text: "HA ○"
-        text_color: 0xC04040
+    - lvgl.label.update: { id: lbl_link, text: "HA", text_color: 0xE04040 }
 ```
 
-- [ ] **Step 4: Replace `page_test` with the home page and a controls placeholder**
+- [ ] **Step 4: Styles, header, navigation and the pages**
 
-Replace the whole `pages:` list under `lvgl:` with:
+Replace the whole `pages:` list under `lvgl:` (and add `style_definitions` / `top_layer` beside it):
 
 ```yaml
   style_definitions:
@@ -474,50 +493,40 @@ Replace the whole `pages:` list under `lvgl:` with:
       radius: 10
       border_width: 0
       pad_all: 6
+    - id: row_style
+      bg_color: 0x1E2430
+      bg_opa: COVER
+      radius: 8
+      border_width: 0
+      pad_all: 4
     - id: nav_style
       bg_color: 0x2A3242
       radius: 8
   top_layer:
     widgets:
-      - label:
-          id: lbl_time
-          x: 8
-          y: 6
-          text: "--:--"
-          text_color: 0xFFFFFF
-      - label:
-          id: lbl_link
-          x: 180
-          y: 6
-          text: "HA ○"
-          text_color: 0xC04040
+      - label: { id: lbl_time, x: 8, y: 8, text: "--:--", text_color: 0xFFFFFF }
+      - label: { id: lbl_title, align: TOP_MID, y: 8, text: "Home", text_color: 0xA0A8B8 }
+      - label: { id: lbl_link, x: 208, y: 8, text: "HA", text_color: 0xE04040 }
       - button:
           x: 8
           y: 288
-          width: 108
+          width: 60
           height: 28
           styles: nav_style
-          widgets:
-            - label:
-                align: CENTER
-                text: "Home"
-          on_click:
-            - lvgl.page.show: page_home
+          widgets: [ label: { align: CENTER, text: "<" } ]
+          on_click: [ lvgl.page.previous ]
       - button:
-          x: 124
+          x: 172
           y: 288
-          width: 108
+          width: 60
           height: 28
           styles: nav_style
-          widgets:
-            - label:
-                align: CENTER
-                text: "Controls"
-          on_click:
-            - lvgl.page.show: page_controls
+          widgets: [ label: { align: CENTER, text: ">" } ]
+          on_click: [ lvgl.page.next ]
   pages:
     - id: page_home
       bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Home" } ]
       widgets:
         - obj:
             x: 8
@@ -525,18 +534,42 @@ Replace the whole `pages:` list under `lvgl:` with:
             width: 108
             height: 118
             styles: tile_style
+            on_click:                           # tap the tile: heat -> off -> auto -> heat
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: "${thermo1_entity}"
+                    hvac_mode: !lambda |-
+                      std::string m = id(thermo1_mode).state;
+                      if (m == "heat") return std::string("off");
+                      if (m == "off") return std::string("auto");
+                      return std::string("heat");
             widgets:
-              - label: { text: "${tile1_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
-              - label: { id: tile1_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "${thermo1_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: thermo1_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: thermo1_target_lbl, text: "set --", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+              - label: { id: thermo1_mode_lbl, text: "--", text_font: montserrat_14, text_color: 0xE0C040, align: BOTTOM_RIGHT }
         - obj:
             x: 124
             y: 36
             width: 108
             height: 118
             styles: tile_style
+            on_click:                           # tap the tile: heat -> off -> auto -> heat
+              - homeassistant.action:
+                  action: climate.set_hvac_mode
+                  data:
+                    entity_id: "${thermo2_entity}"
+                    hvac_mode: !lambda |-
+                      std::string m = id(thermo2_mode).state;
+                      if (m == "heat") return std::string("off");
+                      if (m == "off") return std::string("auto");
+                      return std::string("heat");
             widgets:
-              - label: { text: "${tile2_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
-              - label: { id: tile2_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "${thermo2_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: thermo2_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { id: thermo2_target_lbl, text: "set --", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+              - label: { id: thermo2_mode_lbl, text: "--", text_font: montserrat_14, text_color: 0xE0C040, align: BOTTOM_RIGHT }
         - obj:
             x: 8
             y: 162
@@ -544,8 +577,9 @@ Replace the whole `pages:` list under `lvgl:` with:
             height: 118
             styles: tile_style
             widgets:
-              - label: { text: "${tile3_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
-              - label: { id: tile3_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "PM2.5", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: pm25_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "ug/m3  ok<10", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
         - obj:
             x: 124
             y: 162
@@ -553,18 +587,26 @@ Replace the whole `pages:` list under `lvgl:` with:
             height: 118
             styles: tile_style
             widgets:
-              - label: { text: "${tile4_name}", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
-              - label: { id: tile4_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
-    - id: page_controls
+              - label: { text: "PM10", text_font: montserrat_14, text_color: 0xA0A8B8, align: TOP_LEFT }
+              - label: { id: pm10_value, text: "--", text_font: montserrat_28, text_color: 0xFFFFFF, align: CENTER }
+              - label: { text: "ug/m3  ok<20", text_font: montserrat_14, text_color: 0xA0A8B8, align: BOTTOM_LEFT }
+    - id: page_lights
       bg_color: 0x000000
-      widgets:
-        - label:
-            align: CENTER
-            text: "Controls (Task 6)"
-            text_color: 0xFFFFFF
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Lights" } ]
+      widgets: [ label: { align: CENTER, text: "Lights (Task 6)", text_color: 0xFFFFFF } ]
+    - id: page_server
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Server" } ]
+      widgets: [ label: { align: CENTER, text: "Server (Task 7)", text_color: 0xFFFFFF } ]
+    - id: page_vms
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "VMs" } ]
+      widgets: [ label: { align: CENTER, text: "VMs (Task 7)", text_color: 0xFFFFFF } ]
+    - id: page_storage
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Storage" } ]
+      widgets: [ label: { align: CENTER, text: "Storage (Task 8)", text_color: 0xFFFFFF } ]
 ```
-
-Also add `montserrat_14` and `montserrat_28` to the fonts LVGL builds by listing them once anywhere they are used (ESPHome enables a built-in font when it appears in the config; nothing else to declare).
 
 - [ ] **Step 5: Validate, compile, flash; checkpoint (user)**
 
@@ -572,130 +614,388 @@ Also add `montserrat_14` and `montserrat_28` to the fonts LVGL builds by listing
 esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 ```
 
-Expected: header shows the clock within a minute and `HA ●` in green; the four tiles show the same values as the HA dashboard, updating when HA does; "Controls" shows the placeholder, "Home" returns. Long values overflow a tile? Shorten the `_format`.
+Expected: header with clock (within a minute), "Home", green `HA`; two thermostat tiles showing current temperature, `set NN.N` and the mode word, and tapping a tile cycles its mode heat → off → auto (visible in HA within a second); PM tiles coloured by threshold; `<`/`>` cycle through the five pages and the title follows.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
-git commit -m "waveshare: home page with four live HA tiles, clock and link state"
+git commit -m "waveshare: header, page navigation, Home page with thermostats and PM tiles"
 ```
 
 ---
 
-### Task 6: Controls page — toggle Home Assistant devices
+### Task 6: Lights page — lamps, brightness sliders, timers
 
 **Files:**
-- Modify: `esphome/lcd2.yaml` — `substitutions:` (switch entities), `binary_sensor:` imports, `page_controls` widgets
+- Modify: `esphome/lcd2.yaml` — `substitutions:`, `binary_sensor:` + `sensor:` imports, `page_lights` widgets
 
 **Interfaces:**
-- Consumes: `page_controls`, HA setting "Allow the device to perform Home Assistant actions" (Task 2 checkpoint).
-- Produces: LVGL ids `sw1`..`sw4`; binary sensors `sw1_state`..`sw4_state`.
+- Consumes: `row_style`, HA setting "Allow the device to perform Home Assistant actions".
+- Produces: switch ids `sw_philips`, `sw_tripod`, `sw_candle`, `sw_innr`, `sw_timer`, `sw_daylight`; slider ids `sl_bright1`, `sl_bright2`; label `lbl_timer_min`.
 
 - [ ] **Step 1: Substitutions**
 
 ```yaml
-  sw1_entity: switch.desk_lamp
-  sw1_name: "Desk lamp"
-  sw2_entity: light.living_room
-  sw2_name: "Living light"
-  sw3_entity: switch.fan
-  sw3_name: "Fan"
-  sw4_entity: input_boolean.guest_mode
-  sw4_name: "Guest mode"
+  # --- Lights page ---
+  philips_entity: light.philips_lamp
+  philips_bright_entity: input_number.brightness
+  tripod_entity: light.extended_color_light_10
+  candle_entity: input_boolean.light_timer_enabled44
+  innr_entity: light.innr1
+  innr_bright_entity: input_number.brightness1
+  timer_entity: input_boolean.light_timer_enabled
+  timer_min_entity: input_number.light_timer_minutes
+  daylight_entity: input_boolean.philips_lamp_daylight_sync
+  bright_max: "100"      # max of the input_number helpers; change to 255 if that is how they are defined
 ```
 
-- [ ] **Step 2: State feedback from HA**
+- [ ] **Step 2: State feedback**
+
+New top-level block (one entry per switch; six in total, same shape):
 
 ```yaml
 binary_sensor:
   - platform: homeassistant
-    id: sw1_state
-    entity_id: ${sw1_entity}
-    on_state:
-      - lvgl.widget.update:
-          id: sw1
-          state:
-            checked: !lambda 'return x;'
+    id: philips_state
+    entity_id: ${philips_entity}
+    on_state: [ lvgl.widget.update: { id: sw_philips, state: { checked: !lambda 'return x;' } } ]
   - platform: homeassistant
-    id: sw2_state
-    entity_id: ${sw2_entity}
-    on_state:
-      - lvgl.widget.update:
-          id: sw2
-          state:
-            checked: !lambda 'return x;'
+    id: tripod_state
+    entity_id: ${tripod_entity}
+    on_state: [ lvgl.widget.update: { id: sw_tripod, state: { checked: !lambda 'return x;' } } ]
   - platform: homeassistant
-    id: sw3_state
-    entity_id: ${sw3_entity}
-    on_state:
-      - lvgl.widget.update:
-          id: sw3
-          state:
-            checked: !lambda 'return x;'
+    id: candle_state
+    entity_id: ${candle_entity}
+    on_state: [ lvgl.widget.update: { id: sw_candle, state: { checked: !lambda 'return x;' } } ]
   - platform: homeassistant
-    id: sw4_state
-    entity_id: ${sw4_entity}
-    on_state:
-      - lvgl.widget.update:
-          id: sw4
-          state:
-            checked: !lambda 'return x;'
+    id: innr_state
+    entity_id: ${innr_entity}
+    on_state: [ lvgl.widget.update: { id: sw_innr, state: { checked: !lambda 'return x;' } } ]
+  - platform: homeassistant
+    id: timer_state
+    entity_id: ${timer_entity}
+    on_state: [ lvgl.widget.update: { id: sw_timer, state: { checked: !lambda 'return x;' } } ]
+  - platform: homeassistant
+    id: daylight_state
+    entity_id: ${daylight_entity}
+    on_state: [ lvgl.widget.update: { id: sw_daylight, state: { checked: !lambda 'return x;' } } ]
 ```
 
-- [ ] **Step 3: The controls page**
-
-Replace the `page_controls` entry with four rows; one row shown, the others identical with `sw2..sw4`, `y: 106 / 168 / 230` and their substitutions:
+Append to `sensor:`:
 
 ```yaml
-    - id: page_controls
-      bg_color: 0x000000
-      widgets:
-        - obj:
-            x: 8
-            y: 44
-            width: 224
-            height: 54
-            styles: tile_style
-            widgets:
-              - label: { text: "${sw1_name}", text_color: 0xFFFFFF, align: LEFT_MID }
-              - switch:
-                  id: sw1
-                  align: RIGHT_MID
-                  width: 56
-                  height: 30
-                  on_value:
-                    - if:
-                        condition:
-                          lambda: 'return x;'
-                        then:
-                          - homeassistant.action:
-                              action: homeassistant.turn_on
-                              data:
-                                entity_id: ${sw1_entity}
-                        else:
-                          - homeassistant.action:
-                              action: homeassistant.turn_off
-                              data:
-                                entity_id: ${sw1_entity}
+  - platform: homeassistant
+    id: philips_bright
+    entity_id: ${philips_bright_entity}
+    on_value: [ lvgl.slider.update: { id: sl_bright1, value: !lambda 'return x;' } ]
+  - platform: homeassistant
+    id: innr_bright
+    entity_id: ${innr_bright_entity}
+    on_value: [ lvgl.slider.update: { id: sl_bright2, value: !lambda 'return x;' } ]
+  - platform: homeassistant
+    id: timer_min
+    entity_id: ${timer_min_entity}
+    on_value: [ lvgl.label.update: { id: lbl_timer_min, text: { format: "%.0f min", args: [x] } } ]
 ```
 
-`homeassistant.turn_on/turn_off` work for switches, lights, fans and input_booleans, so the same block serves any entity domain.
+- [ ] **Step 3: The page**
+
+Replace the `page_lights` placeholder. Rows are 38 px tall at y = 38, 79, 120, 161, 202, 243. The switch block is shown once (Philips); the other five switches are identical with their own ids and entities. `homeassistant.turn_on/turn_off` serve lights and input_booleans alike.
+
+```yaml
+    - id: page_lights
+      bg_color: 0x000000
+      on_load: [ lvgl.label.update: { id: lbl_title, text: "Lights" } ]
+      widgets:
+        - obj:                                  # row 1: Philips lamp on/off
+            x: 8
+            y: 38
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Philips lamp", text_color: 0xFFFFFF, align: LEFT_MID }
+              - switch:
+                  id: sw_philips
+                  align: RIGHT_MID
+                  width: 50
+                  height: 26
+                  on_value:
+                    - if:
+                        condition: { lambda: 'return x;' }
+                        then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${philips_entity}" } } ]
+                        else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${philips_entity}" } } ]
+        - obj:                                  # row 2: Philips brightness
+            x: 8
+            y: 79
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Bright", text_font: montserrat_14, text_color: 0xA0A8B8, align: LEFT_MID }
+              - slider:
+                  id: sl_bright1
+                  x: 60
+                  align: LEFT_MID
+                  width: 150
+                  height: 10
+                  min_value: 0
+                  max_value: ${bright_max}
+                  on_release:
+                    - homeassistant.action:
+                        action: input_number.set_value
+                        data:
+                          entity_id: "${philips_bright_entity}"
+                          value: !lambda 'return to_string((int) x);'
+        - obj:                                  # row 3: Tripod lamp + candle
+            x: 8
+            y: 120
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Tripod", text_color: 0xFFFFFF, align: LEFT_MID }
+              - switch: { id: sw_tripod, x: 66, align: LEFT_MID, width: 50, height: 26,
+                          on_value: [ if: { condition: { lambda: 'return x;' },
+                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${tripod_entity}" } } ],
+                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${tripod_entity}" } } ] } ] }
+              - label: { text: "Candle", text_font: montserrat_14, text_color: 0xA0A8B8, x: -58, align: RIGHT_MID }
+              - switch: { id: sw_candle, align: RIGHT_MID, width: 50, height: 26,
+                          on_value: [ if: { condition: { lambda: 'return x;' },
+                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${candle_entity}" } } ],
+                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${candle_entity}" } } ] } ] }
+        - obj:                                  # row 4: Innr lamp on/off
+            x: 8
+            y: 161
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Innr lamp", text_color: 0xFFFFFF, align: LEFT_MID }
+              - switch: { id: sw_innr, align: RIGHT_MID, width: 50, height: 26,
+                          on_value: [ if: { condition: { lambda: 'return x;' },
+                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${innr_entity}" } } ],
+                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${innr_entity}" } } ] } ] }
+        - obj:                                  # row 5: Innr brightness
+            x: 8
+            y: 202
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Bright", text_font: montserrat_14, text_color: 0xA0A8B8, align: LEFT_MID }
+              - slider:
+                  id: sl_bright2
+                  x: 60
+                  align: LEFT_MID
+                  width: 150
+                  height: 10
+                  min_value: 0
+                  max_value: ${bright_max}
+                  on_release:
+                    - homeassistant.action:
+                        action: input_number.set_value
+                        data:
+                          entity_id: "${innr_bright_entity}"
+                          value: !lambda 'return to_string((int) x);'
+        - obj:                                  # row 6: light timer + daylight sync
+            x: 8
+            y: 243
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "Timer", text_color: 0xFFFFFF, align: LEFT_MID }
+              - switch: { id: sw_timer, x: 52, align: LEFT_MID, width: 50, height: 26,
+                          on_value: [ if: { condition: { lambda: 'return x;' },
+                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${timer_entity}" } } ],
+                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${timer_entity}" } } ] } ] }
+              - label: { id: lbl_timer_min, text: "-- min", text_font: montserrat_14, text_color: 0xA0A8B8, x: 108, align: LEFT_MID }
+              - label: { text: "Day", text_font: montserrat_14, text_color: 0xA0A8B8, x: -56, align: RIGHT_MID }
+              - switch: { id: sw_daylight, align: RIGHT_MID, width: 50, height: 26,
+                          on_value: [ if: { condition: { lambda: 'return x;' },
+                                            then: [ homeassistant.action: { action: homeassistant.turn_on,  data: { entity_id: "${daylight_entity}" } } ],
+                                            else: [ homeassistant.action: { action: homeassistant.turn_off, data: { entity_id: "${daylight_entity}" } } ] } ] }
+```
 
 - [ ] **Step 4: Validate, compile, flash; checkpoint (user)**
 
-Expected: each switch shows the current HA state at boot; flipping one toggles the real device within a second; toggling the device from HA moves the switch on the panel. If nothing happens and the log says `Action ... denied` or shows no call, the "Allow the device to perform Home Assistant actions" setting is off (Task 2 checkpoint).
+Expected: switches show the current HA states at boot; flipping one toggles the real lamp/helper within a second and toggling from HA moves the panel's switch; dragging a brightness slider and releasing sets the input_number (watch it in HA). If the sliders sit at the wrong end, the helpers use 0–255: set `bright_max: "255"`. If nothing toggles and the log shows no action call, enable "Allow the device to perform Home Assistant actions" (Task 2 checkpoint).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
-git commit -m "waveshare: controls page toggling HA devices with state feedback"
+git commit -m "waveshare: Lights page with lamp switches, brightness sliders and timer toggles"
 ```
 
 ---
 
-### Task 7: Idle dimming, touch wake, battery voltage
+### Task 7: Server and VMs pages — bar rows with severity colours
+
+**Files:**
+- Modify: `esphome/lcd2.yaml` — `substitutions:`, `sensor:` imports, `page_server` and `page_vms` widgets
+
+**Interfaces:**
+- Consumes: `row_style`.
+- Produces: bar ids `bar_cpu_temp`, `bar_gpu_temp`, `bar_nvme_temp`, `bar_px_cpu`, `bar_px_ram`, `bar_px_disk`, `bar_vm_cpu`, `bar_vm_ram`, `bar_vm_disk`, `bar_vm_io`, `bar_ha_cpu`, `bar_ha_ram`, `bar_ha_disk`; matching `val_*` labels.
+
+**The bar-row pattern** (one metric = one widget row + one import). Thresholds come from the user's HA gauges (yellow / red):
+
+```yaml
+        - obj:                                  # widget row: name left, value right, bar below
+            x: 8
+            y: 38
+            width: 224
+            height: 38
+            styles: row_style
+            widgets:
+              - label: { text: "CPU (Tctl)", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_LEFT }
+              - label: { id: val_cpu_temp, text: "--", text_font: montserrat_14, text_color: 0xFFFFFF, align: TOP_RIGHT }
+              - bar:
+                  id: bar_cpu_temp
+                  align: BOTTOM_MID
+                  width: 212
+                  height: 8
+                  min_value: 0
+                  max_value: 100
+                  value: 0
+                  bg_color: 0x2A3242
+                  indicator: { bg_color: 0x3A7BD5 }
+```
+
+```yaml
+  - platform: homeassistant                     # import: value -> bar + label, colour by severity
+    id: cpu_temp
+    entity_id: ${cpu_temp_entity}
+    on_value:
+      - lvgl.bar.update: { id: bar_cpu_temp, value: !lambda 'return x;' }
+      - lvgl.label.update: { id: val_cpu_temp, text: { format: "%.0f °C", args: [x] } }
+      - if:
+          condition: { lambda: 'return x < 70;' }
+          then: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0x40C040 } ]
+          else:
+            - if:
+                condition: { lambda: 'return x < 85;' }
+                then: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0xE0C040 } ]
+                else: [ lvgl.label.update: { id: val_cpu_temp, text_color: 0xE04040 } ]
+```
+
+- [ ] **Step 1: Substitutions**
+
+```yaml
+  # --- Server page (Proxmox host) ---
+  cpu_temp_entity: sensor.cpu_temp
+  gpu_temp_entity: sensor.gpu_temp
+  nvme_temp_entity: sensor.nvme_temp
+  px_cpu_entity: sensor.proxmox_cpu_usage
+  px_ram_entity: sensor.proxmox_ram_usage
+  px_disk_entity: sensor.proxmox_root_disk_usage
+  # --- VMs page ---
+  vm_cpu_entity: sensor.cpu_usage
+  vm_ram_entity: sensor.ram_usage
+  vm_disk_entity: sensor.root_disk_usage
+  vm_io_entity: sensor.cpu_iowait
+  ha_cpu_entity: sensor.processor_use
+  ha_ram_entity: sensor.memory_use_percent
+  ha_disk_entity: sensor.disk_use_percent
+```
+
+- [ ] **Step 2: Server page**
+
+Six rows (y = 38, 79, 120, 161, 202, 243), using the pattern above with: `CPU (Tctl)` 0–100 °C yellow 70 red 85; `GPU (edge)` 0–100 °C 70/85; `NVMe` 0–94 °C 60/75; `Proxmox CPU` % 70/90; `Proxmox RAM` % 90/95; `Proxmox disk` % 70/85. Value formats `%.0f °C` for temperatures, `%.0f %%` for percentages. Six imports with the matching thresholds.
+
+- [ ] **Step 3: VMs page**
+
+Seven rows, 32 px tall at y = 38 + 35·k (k = 0..6): `Ubuntu CPU` 70/90, `Ubuntu RAM` 90/95, `Ubuntu disk` 70/85, `Ubuntu IO wait` 10/20, `HA CPU` 70/90, `HA RAM` 90/95, `HA disk` 70/85, all `%.0f %%`. For 32 px rows use `height: 32`, bar `height: 6`.
+
+- [ ] **Step 4: Validate, compile, flash; checkpoint (user)**
+
+Expected: both pages show live values matching the HA gauges; a value crossing its yellow threshold turns the number yellow (e.g. start a CPU-heavy job on the VM). No layout overlap: each row's name, value and bar visible.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
+git commit -m "waveshare: Server and VMs pages with severity-coloured bar rows"
+```
+
+---
+
+### Task 8: Storage page — disk usage, temperatures, NVMe wear, RAID, SMART
+
+**Files:**
+- Modify: `esphome/lcd2.yaml` — `substitutions:`, `sensor:`/`text_sensor:` imports, `page_storage` widgets
+
+**Interfaces:**
+- Consumes: bar-row pattern (Task 7), `row_style`.
+- Produces: `bar_bigdata_use`, `bar_jelly_use`, `bar_nvme_wear`, `val_bigdata_temp`, `val_jelly_temp`, `lbl_raid`, `lbl_smart`.
+
+- [ ] **Step 1: Substitutions**
+
+```yaml
+  # --- Storage page ---
+  bigdata_use_entity: sensor.bigdata_disk_usage
+  jelly_use_entity: sensor.jellymedia_disk_usage
+  nvme_wear_entity: sensor.nvme_percentage_used
+  bigdata_temp_entity: sensor.bigdata_temp
+  jelly_temp_entity: sensor.jellymedia_temp
+  raid_active_entity: sensor.raid_active_disks
+  raid_failed_entity: sensor.raid_failed_disks
+  smart_health_entity: sensor.smart_overall_health
+```
+
+- [ ] **Step 2: Widgets and imports**
+
+Rows (y = 38, 73, 108 with height 32): bar rows `BigData use` % 70/85, `JellyMedia use` % 70/85, `NVMe wear` % 50/80. Row y = 143 (height 32): two temperature values side by side, `BigData NN °C` (45/55) and `Jelly NN °C` (45/55), coloured by severity, no bar. Row y = 178 (height 44): label `lbl_raid` text `RAID md0: A active, F failed` — imports of `raid_active_entity` and `raid_failed_entity` each update the label with a lambda combining `id(raid_active).state` and `id(raid_failed).state`; red when failed > 0, green otherwise. Row y = 226 (height 44): label `lbl_smart` fed by a `text_sensor` import of `${smart_health_entity}`; text as delivered by HA.
+
+```yaml
+text_sensor:
+  - platform: homeassistant
+    id: smart_health
+    entity_id: ${smart_health_entity}
+    on_value: [ lvgl.label.update: { id: lbl_smart, text: !lambda 'return "SMART: " + x;' } ]
+```
+
+```yaml
+  - platform: homeassistant
+    id: raid_active
+    entity_id: ${raid_active_entity}
+    on_value: [ script.execute: update_raid ]
+  - platform: homeassistant
+    id: raid_failed
+    entity_id: ${raid_failed_entity}
+    on_value: [ script.execute: update_raid ]
+```
+
+```yaml
+script:
+  - id: update_raid
+    then:
+      - lvgl.label.update:
+          id: lbl_raid
+          text: !lambda 'char b[40]; snprintf(b, sizeof(b), "RAID md0: %.0f active, %.0f failed", id(raid_active).state, id(raid_failed).state); return std::string(b);'
+      - if:
+          condition: { lambda: 'return id(raid_failed).state > 0;' }
+          then: [ lvgl.label.update: { id: lbl_raid, text_color: 0xE04040 } ]
+          else: [ lvgl.label.update: { id: lbl_raid, text_color: 0x40C040 } ]
+```
+
+- [ ] **Step 3: Validate, compile, flash; checkpoint (user)**
+
+Expected: three usage bars, two temperatures, the RAID line in green with the right disk counts, the SMART line with HA's text.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
+git commit -m "waveshare: Storage page with disk usage, temperatures, NVMe wear, RAID and SMART"
+```
+
+---
+
+### Task 9: Idle dimming, touch wake, battery voltage
 
 **Files:**
 - Modify: `esphome/lcd2.yaml` — `lvgl.on_idle`, touchscreen `on_touch`, `sensor:` battery
@@ -763,16 +1063,16 @@ git commit -m "waveshare: idle backlight off with touch wake, battery voltage se
 
 ---
 
-### Task 8: Documentation and finish
+### Task 10: Documentation and finish
 
 **Files:**
 - Modify: `waveshare/esp32-s3-touch-lcd-2/README.md`
-- Create: `waveshare/esp32-s3-touch-lcd-2/docs/page-home.jpg`, `docs/page-controls.jpg` (user photos, EXIF-stripped)
+- Create: `waveshare/esp32-s3-touch-lcd-2/docs/page-home.jpg`, `page-lights.jpg`, `page-server.jpg`, `page-vms.jpg`, `page-storage.jpg` (user photos, EXIF-stripped)
 - Modify: `README.md` at the repo root (one line listing the project)
 
 - [ ] **Step 1: README**
 
-Replace the "Status: planned" paragraph with: what it does, the two pages with photos, HA setup (ESPHome integration, API key, "Allow the device to perform Home Assistant actions"), build/flash commands (venv path, `esphome run`, first-flash download mode), how to add a tile or a switch (the three places), the idle behaviour, and a troubleshooting list (colour order, invert, touch transform, skip_probe). Keep the board pin table.
+Replace the "Status: planned" paragraph with: what it does, the five pages with photos, HA setup (ESPHome integration, API key, "Allow the device to perform Home Assistant actions"), build/flash commands (venv path, `esphome run`, first-flash download mode), how to add a tile or a switch (the three places), the idle behaviour, and a troubleshooting list (colour order, invert, touch transform, skip_probe). Keep the board pin table.
 
 - [ ] **Step 2: Repo README**
 
@@ -798,5 +1098,5 @@ Then use superpowers:finishing-a-development-branch (merge / PR / keep).
 
 ## Self-review notes
 
-- Spec §1 scope → Tasks 2–7; §2 pins → Global Constraints + Tasks 3/4/7; §3 architecture → Tasks 2, 5, 6; §4 UI → Tasks 5–7; §5 substitutions → Tasks 5, 6; §6 HA-side → Task 2 checkpoint, Task 6 checkpoint; §7 verification → each checkpoint; §8 fallbacks → Task 3/4 checkpoints.
+- Spec §1 scope → Tasks 2–9 (pages revised to the user's entities on 2026-09-03: Home, Lights, Server, VMs, Storage); §2 pins → Global Constraints + Tasks 3/4/7; §3 architecture → Tasks 2, 5, 6; §4 UI → Tasks 5–7; §5 substitutions → Tasks 5, 6; §6 HA-side → Task 2 checkpoint, Task 6 checkpoint; §7 verification → each checkpoint; §8 fallbacks → Task 3/4 checkpoints.
 - Names: `lcd`, `touch`, `backlight`, `ha_time` (2–3) used in 4–7; `page_home/page_controls`, `tile1_value..tile4_value`, `lbl_time`, `lbl_link` (5) used in 6–7; `sw1..sw4` and `sw1_state..` (6). The `mipi_spi` model name and the `homeassistant.action` `action:` key are current-release syntax; if `esphome config` rejects either, the legacy `st7789v` snippet (Task 3) and `service:` (older releases) are the fallbacks.

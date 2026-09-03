@@ -1,0 +1,51 @@
+# Waveshare ESP32-S3-Touch-LCD-2 — Home Assistant touch dashboard (ESPHome, native API).
+# Pins from Waveshare's demos: LCD SPI 38/39/40, CS 45, DC 42, BL 1; touch I2C 48/47 @0x15.
+# Entity IDs and names live in substitutions:. Secrets in secrets.yaml (git-ignored).
+substitutions:
+  name: lcd2
+  friendly_name: "LCD2 Dashboard"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s

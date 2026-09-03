@@ -10,7 +10,7 @@ A wall/desk touch panel that shows a handful of Home Assistant (HA) values and t
 handful of HA devices, with no PC in the loop.
 
 **In scope (v1):** ESPHome firmware; Wi-Fi + HA native API (encrypted) + OTA; LVGL UI with
-two pages (data tiles, controls) and a header (time, HA link state); backlight PWM with idle
+five pages (Home, Lights, Server, VMs, Storage) and a header (time, page title, HA link state); backlight PWM with idle
 dimming and touch wake; battery voltage sensor; everything parameterised by `substitutions:`
 so entity IDs are edited in one place.
 
@@ -58,36 +58,45 @@ committed.
 
 ## 4. UI
 
-Portrait, 240 wide × 320 tall.
+Portrait, 240 wide × 320 tall. Header (clock · page title · HA link dot), five pages
+navigated with `<` / `>` buttons in a bottom bar. Revised 2026-09-03 to the user's entities.
 
 ```
 ┌──────────────────────────┐ y=0
-│ 12:34            HA ●    │ header (time, link state)
+│ 12:34      Home       HA │ header
 ├──────────────────────────┤ y=32
 │ ┌──────────┐ ┌──────────┐│
-│ │ Living   │ │ Outside  ││  4 data tiles: name (small), value+unit (large)
-│ │ 21.4 °C  │ │ 13.8 °C  ││
+│ │Thermo 14 │ │Thermo 15 ││ Home: current temp (large), "set NN.N",
+│ │ 21.4 °C  │ │ 19.8 °C  ││       hvac mode; tap = cycle heat/off/auto
+│ │set 21.0 heat│ ...      ││
 │ └──────────┘ └──────────┘│
 │ ┌──────────┐ ┌──────────┐│
-│ │ Power    │ │ Humidity ││
-│ │  412 W   │ │  58 %    ││
+│ │ PM2.5    │ │ PM10     ││ value coloured green/yellow/red at
+│ │    7     │ │   14     ││ <10/<20 and <20/<40
 │ └──────────┘ └──────────┘│
 ├──────────────────────────┤ y=284
-│   [ Home ]   [Controls]  │ nav bar (two buttons)
+│  [ < ]              [ > ]│ nav
 └──────────────────────────┘ y=320
 ```
 
-Page 2, "Controls": four rows, each an LVGL `switch` with a name label. The switch state
-mirrors HA (via a `homeassistant` binary sensor → `lvgl.widget.update`), and flipping it
-calls `homeassistant.turn_on` / `homeassistant.turn_off` on the entity, which works for
-switches, lights, fans and input_booleans alike.
+- **Lights:** six rows — Philips lamp switch; Philips brightness slider (input_number);
+  Tripod lamp switch + Candle toggle; Innr lamp switch; Innr brightness slider; Light-timer
+  toggle with minutes label + Daylight-sync toggle. Switches mirror HA via
+  `homeassistant` binary sensors and call `homeassistant.turn_on/turn_off`; sliders call
+  `input_number.set_value` on release.
+- **Server:** six bar rows (name, value, thin bar): CPU temp, GPU temp, NVMe temp,
+  Proxmox CPU/RAM/root disk. Value text coloured by the same yellow/red thresholds as the
+  user's HA gauges.
+- **VMs:** seven bar rows: Ubuntu VM CPU/RAM/disk/IO-wait, HA VM CPU/RAM/disk.
+- **Storage:** BigData / JellyMedia usage bars, NVMe wear bar, BigData / JellyMedia
+  temperatures, RAID md0 active/failed line (red if any failed), SMART overall-health line.
 
 Idle: after 60 s without touch, the backlight turns off and LVGL pauses; any touch resumes
-LVGL, redraws and turns the backlight back on. Backlight is also an HA `light` entity, so
-brightness can be automated (e.g. dim at night).
+LVGL, redraws and turns the backlight back on. Backlight is also an HA `light` entity.
 
 Fonts: LVGL's built-in Montserrat set (`montserrat_14`, `_20`, `_28`); they include the
-degree sign. No downloaded fonts in v1.
+degree sign. No downloaded fonts in v1. Colours: tile `0x1E2430`, neutral bar `0x3A7BD5`,
+severity green `0x40C040` / yellow `0xE0C040` / red `0xE04040`.
 
 ## 5. Parameterisation
 
