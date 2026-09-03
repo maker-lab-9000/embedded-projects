@@ -854,7 +854,7 @@ git commit -m "waveshare: Server and VMs pages with severity-coloured bar rows"
 - Consumes: bar-row pattern (Task 7), `row_style`.
 - Produces: `bar_bigdata_use`, `bar_jelly_use`, `bar_nvme_wear`, `val_bigdata_temp`, `val_jelly_temp`, `lbl_raid`, `lbl_smart`.
 
-- [ ] **Step 1: Substitutions**
+- [x] **Step 1: Substitutions**
 
 ```yaml
   # --- Storage page ---
@@ -868,7 +868,7 @@ git commit -m "waveshare: Server and VMs pages with severity-coloured bar rows"
   smart_health_entity: sensor.smart_overall_health
 ```
 
-- [ ] **Step 2: Widgets and imports**
+- [x] **Step 2: Widgets and imports**
 
 Rows (y = 38, 73, 108 with height 32): bar rows `BigData use` % 70/85, `JellyMedia use` % 70/85, `NVMe wear` % 50/80. Row y = 143 (height 32): two temperature values side by side, `BigData NN °C` (45/55) and `Jelly NN °C` (45/55), coloured by severity, no bar. Row y = 178 (height 44): label `lbl_raid` text `RAID md0: A active, F failed` — imports of `raid_active_entity` and `raid_failed_entity` each update the label with a lambda combining `id(raid_active).state` and `id(raid_failed).state`; red when failed > 0, green otherwise. Row y = 226 (height 44): label `lbl_smart` fed by a `text_sensor` import of `${smart_health_entity}`; text as delivered by HA.
 
@@ -904,11 +904,13 @@ script:
           else: [ lvgl.label.update: { id: lbl_raid, text_color: 0x40C040 } ]
 ```
 
-- [ ] **Step 3: Validate, compile, flash; checkpoint (user)**
+- [x] **Step 3: Validate, compile, flash; checkpoint (user)**
 
 Expected: three usage bars, two temperatures, the RAID line in green with the right disk counts, the SMART line with HA's text.
 
-- [ ] **Step 4: Commit**
+Result 2026-09-03: passed — values match HA, RAID line green with the real counts.
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
