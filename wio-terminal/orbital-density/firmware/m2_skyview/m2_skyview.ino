@@ -25,6 +25,7 @@
 #include "loopstats.h"         // loop max-time + iteration counters (see Sensors page / status line)
 #include "i2c_bus.h"           // 100 kHz clock constant, presence probe, boot scan
 #include "tsl2591.h"           // optical sky (0x29), register-level non-blocking driver
+#include "mmc5603.h"           // magnetometer (0x30) on the arm; continuous 10 Hz, auto set/reset
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -1203,6 +1204,7 @@ void setup() {
   bmeOk = bmeInit();
   if (bmeOk) bmeRead();
   tslInit();                    // optical sky sensor (0x29); re-probed every 30 s if absent
+  magInit();                    // magnetometer (0x30); re-probed every 30 s if absent
 
   tft.begin();
   tft.setRotation(3);
@@ -1231,10 +1233,12 @@ void loop() {
   pollButtons();
   pollDust();
   tslPoll();
+  magPoll();
 
   if (millis() - lastReprobeMs >= I2C_REPROBE_MS) {
     lastReprobeMs = millis();
     if (!tslOk) tslInit();
+    if (!magOk) magInit();
   }
 
   if (everFixed && millis() - lastToggleMs >= MODE_TOGGLE_MS) {
@@ -1250,6 +1254,7 @@ void loop() {
     pushHist(countInView(), countInView() - countPositioned());
     pushDustHist(dustRatio);
     pushConstelHist();
+    magPushHist();
     if (bmeOk) { pushEnvHist(); evalWeather(); }
   }
 
@@ -1260,6 +1265,7 @@ void loop() {
     evalAnomaly();
     computeBodies();
     if (bmeOk) bmeRead();
+    magRollSecond();
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
     // Status line. NOTE: this core's Serial.printf() truncates at ~80 chars, so the line is
     // built from several printf calls; each sensor module appends its own segment.
@@ -1271,6 +1277,7 @@ void loop() {
       (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast,
       (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
     Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);
+    Serial.printf(" | mag |B|=%.1f hdg=%.0f", magMeanTotal, magMeanHeading);
     Serial.println();
   }
 

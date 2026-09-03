@@ -876,7 +876,7 @@ git commit -m "orbital-density: integrate TSL2591 optical sky sensor"
 - Produces: `template<typename T,int N> struct Ring { T v[N]; int len; void push(T); }`, `const int SENSOR_HIST_N = 288;`
 - Produces: `bool magOk; bool magInit(); void magPoll(); void magRollSecond(); void magPushHist();` `float magMeanX, magMeanY, magMeanZ, magMeanTotal, magMeanHeading;` `uint32_t magLastMs, magSampleCount, magErrCount;` `Ring<int16_t,288> magTotalHist;` constants `MAG_OFF_X/Y/Z, MAG_MOUNT_OFFSET_DEG, MAG_DECLINATION_DEG`.
 
-- [ ] **Step 1: Write `ring.h`**
+- [x] **Step 1: Write `ring.h`**
 
 ```cpp
 // ring.h — fixed-capacity history (oldest first, newest at v[len-1]) for the new sensor
@@ -898,7 +898,7 @@ struct Ring {
 const int SENSOR_HIST_N = 288;
 ```
 
-- [ ] **Step 2: Write `mmc5603.h`**
+- [x] **Step 2: Write `mmc5603.h`**
 
 ```cpp
 // mmc5603.h — Adafruit MMC5603 magnetometer (I2C 0x30) at the end of the 15–30 cm
@@ -987,7 +987,7 @@ void magRollSecond() {
 void magPushHist() { if (magOk) magTotalHist.push((int16_t)(magMeanTotal * 10.0f + 0.5f)); }
 ```
 
-- [ ] **Step 3: Wire it into the sketch**
+- [x] **Step 3: Wire it into the sketch**
 
 Add after the `tsl2591.h` include:
 
@@ -1003,17 +1003,19 @@ Add after the `tsl2591.h` include:
 
 `loop()`: after `tslPoll();` add `magPoll();`. In the re-probe block add `if (!magOk) magInit();`. In the 5-min `HIST_PERIOD_MS` block, after `pushConstelHist();` add `magPushHist();`. In the 1 Hz block, after `if (bmeOk) bmeRead();` add `magRollSecond();`. Add a status-line segment before the `Serial.println();`: `Serial.printf(" | mag |B|=%.1f hdg=%.0f", magMeanTotal, magMeanHeading);`.
 
-- [ ] **Step 4: Compile**
+- [x] **Step 4: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
 ```
 
-- [ ] **Step 5: Hardware checkpoint (user)**
+- [x] **Step 5: Hardware checkpoint (user)**
 
 Upload, 5 minutes. Expected: `|B|` 40–60 µT and `hdg` steady when still, away from the terminal; `loopMax` and `nmeaFail` within baseline. Unplug/replug the MMC5603: values freeze then resume within 30 s.
 
-- [ ] **Step 6: Commit**
+Result 2026-09-03: passed. 184 s with a 3D fix: loopMax median 137 ms (baseline 138), ~195k iterations/s, NMEA pass 8.0/s, fail 0.26/s (baseline 0.37). |B| 50.6–56.7 µT, heading steady. Hot-plug test done on the TSL2591 instead: frozen 73 s (≈40 s unplugged + re-probe), then resumed; MMC5603 and BME280 unaffected.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m2_skyview
