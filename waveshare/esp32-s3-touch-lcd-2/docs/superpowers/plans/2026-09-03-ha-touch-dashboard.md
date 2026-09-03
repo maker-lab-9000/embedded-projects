@@ -974,11 +974,13 @@ Append to `sensor:`:
     accuracy_decimals: 2
 ```
 
-- [ ] **Step 3: Validate, compile, flash; checkpoint (user)**
+- [x] **Step 3: Validate, compile, flash; checkpoint (user)**
 
 Expected: after 60 s untouched the screen goes dark; one touch brings it back with the UI intact (no ghosting); `Battery Voltage` in HA reads ~4.9–5.1 V on USB without a battery, or the cell voltage (3.3–4.2 V) with one; compare with a multimeter on the MX1.25 pads and adjust `multiply` if off by more than 0.1 V.
 
-- [ ] **Step 4: Commit**
+Result 2026-09-03: passed — screen dims after 60 s, one touch restores the page intact, Battery Voltage entity present in HA (built together with Task 11).
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
@@ -991,18 +993,18 @@ git commit -m "waveshare: idle backlight off with touch wake, battery voltage se
 
 **Files:**
 - Modify: `waveshare/esp32-s3-touch-lcd-2/README.md`
-- Create: `waveshare/esp32-s3-touch-lcd-2/docs/page-home.jpg`, `page-lights.jpg`, `page-server.jpg`, `page-vms.jpg`, `page-storage.jpg` (user photos, EXIF-stripped)
+- Create: `waveshare/esp32-s3-touch-lcd-2/docs/page-rooms.jpg`, `page-home.jpg`, `page-lights.jpg`, `page-server.jpg`, `page-vms.jpg`, `page-storage.jpg` (user photos, EXIF-stripped)
 - Modify: `README.md` at the repo root (one line listing the project)
 
-- [ ] **Step 1: README**
+- [x] **Step 1: README**
 
-Replace the "Status: planned" paragraph with: what it does, the five pages with photos, HA setup (ESPHome integration, API key, "Allow the device to perform Home Assistant actions"), build/flash commands (venv path, `esphome run`, first-flash download mode), how to add a tile or a switch (the three places), the idle behaviour, and a troubleshooting list (colour order, invert, touch transform, skip_probe). Keep the board pin table.
+Replace the "Status: planned" paragraph with: what it does, the six pages with photos, HA setup (ESPHome integration, API key, "Allow the device to perform Home Assistant actions"), build/flash commands (venv path, `esphome run`, first-flash download mode), how to add a tile or a switch (the three places), the idle behaviour, and a troubleshooting list (colour order, invert, touch transform, skip_probe). Keep the board pin table.
 
-- [ ] **Step 2: Repo README**
+- [x] **Step 2: Repo README**
 
 Add a bullet for `waveshare/esp32-s3-touch-lcd-2` next to the existing projects.
 
-- [ ] **Step 3: Commit and finish**
+- [x] **Step 3: Commit and finish**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2 README.md
@@ -1010,6 +1012,56 @@ git commit -m "waveshare docs: ESP32-S3-Touch-LCD-2 dashboard README, photos, re
 ```
 
 Then use superpowers:finishing-a-development-branch (merge / PR / keep).
+
+Result 2026-09-03: README written (pages, HA setup, build/flash, extending, troubleshooting); repo index row added. Page photos not yet taken — the six `<img>` tags in the README point at `docs/page-*.jpg` to be added.
+
+---
+
+### Task 11: Rooms page — temperature and humidity per room, shown first
+
+Added 2026-09-03 at the user's request (built together with Task 9, before Task 10). Four rooms, each a tile with the temperature large and the humidity below; this page is first in `pages:` so it is the home screen; the thermostat/PM page follows.
+
+**Files:**
+- Modify: `esphome/lcd2.yaml` — `substitutions:`, eight `sensor:` imports, `page_rooms` inserted before `page_home`, header default title "Rooms"
+
+**Interfaces:**
+- Consumes: `tile_style`.
+- Produces: label ids `room1_temp_lbl`..`room4_temp_lbl`, `room1_hum_lbl`..`room4_hum_lbl`; page `page_rooms`.
+
+- [x] **Step 1: Substitutions**
+
+```yaml
+  # --- Rooms page (first page): temperature + humidity per room ---
+  room1_name: "Bedroom"
+  room1_temp_entity: sensor.multi_sensor_bedzimmer
+  room1_hum_entity: sensor.multi_sensor_bedzimmer_2
+  room2_name: "Theo's room"
+  room2_temp_entity: sensor.multi_sensor_wohnzimmer
+  room2_hum_entity: sensor.multi_sensor_wohnzimmer_2
+  room3_name: "Bathroom"
+  room3_temp_entity: sensor.temperature_9
+  room3_hum_entity: sensor.humidity_10
+  room4_name: "Living Room"
+  room4_temp_entity: sensor.living_room
+  room4_hum_entity: sensor.living_room_2
+```
+
+- [x] **Step 2: Imports and tiles**
+
+Per room, two imports (`%.1f °C` → `roomN_temp_lbl`, `%.1f %%` → `roomN_hum_lbl`) and one tile at (8|124, 36|162), 108×118: name top-left (grey, 14), temperature centre (white, 28), humidity bottom-left (blue, 14) with "RH" bottom-right. Same tile geometry as the Home page.
+
+- [x] **Step 3: Validate, compile, flash; checkpoint (user)**
+
+Expected: the panel boots on "Rooms" with the four tiles matching the HA Temperature / Humidity card; `>` leads to Home (thermostats + PM), then Lights, Server, VMs, Storage.
+
+Result 2026-09-03: passed — boots on Rooms, values match the HA card, page order as designed. Build 1.29 MB flash / 126 KB RAM.
+
+- [x] **Step 4: Commit**
+
+```bash
+git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
+git commit -m "waveshare: Rooms page with temperature and humidity tiles as the first page"
+```
 
 ---
 

@@ -10,7 +10,7 @@ A wall/desk touch panel that shows a handful of Home Assistant (HA) values and t
 handful of HA devices, with no PC in the loop.
 
 **In scope (v1):** ESPHome firmware; Wi-Fi + HA native API (encrypted) + OTA; LVGL UI with
-five pages (Home, Lights, Server, VMs, Storage) and a header (time, page title, HA link state); backlight PWM with idle
+six pages (Rooms, Home, Lights, Server, VMs, Storage) and a header (time, page title, HA link state); backlight PWM with idle
 dimming and touch wake; battery voltage sensor; everything parameterised by `substitutions:`
 so entity IDs are edited in one place.
 
@@ -58,8 +58,12 @@ committed.
 
 ## 4. UI
 
-Portrait, 240 wide × 320 tall. Header (clock · page title · HA link dot), five pages
+Portrait, 240 wide × 320 tall. Header (clock · page title · HA link dot), six pages
 navigated with `<` / `>` buttons in a bottom bar. Revised 2026-09-03 to the user's entities.
+
+- **Rooms (first page, added 2026-09-03):** four tiles — Bedroom, Theo's room, Bathroom,
+  Living Room — temperature large, humidity below, from the Temperature / Humidity card's
+  eight sensors.
 
 ```
 ┌──────────────────────────┐ y=0
