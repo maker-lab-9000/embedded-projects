@@ -135,7 +135,7 @@ not the chassis I²C socket is used; the socket itself is a passive pass-through
 - **Adafruit_TSL2591 blocks.** `getFullLuminosity()` calls `delay(120)` × (integration steps + 1): 720 ms at the 600 ms integration the night sky needs. `getLuminosity()` wraps it. Not usable in this loop. We write a small register-level driver instead (same style as the existing BME280 code).
 - **Adafruit_MMC56x3 blocks in one-shot mode** (`while (!done) delay(5)`). In continuous mode `getEvent()` just reads registers. We use continuous mode.
 - **Adafruit_MLX90614** reads are single SMBus word transfers, well under 1 ms each. Usable as-is.
-- **SD `open`/`printf`/`close` per row** is fine at 60 s but not at 1 Hz. The observation file stays open and is `flush()`ed every 10 s.
+- **SD `open`/`printf`/`close` per row** is fine at 60 s but not at 1 Hz. Rows are batched in RAM and written once per 10 s.
 - **RAM:** 77 KB sprite + ~8 KB histories of 192 KB. New 288-sample `int16_t` histories cost 576 bytes each. Budget: at most four new histories.
 - **CPU:** `computeBodies()` (soft-float `double` ephemeris) is the heaviest 1 Hz job. New per-second work is a few register reads; new per-loop work is one `millis()` compare and one status-register read.
 - **Fallback if NMEA loss grows:** raise the UART buffer with a build property, e.g. `arduino-cli compile --build-property "compiler.cpp.extra_flags=-DSERIAL_BUFFER_SIZE=1024" ...`. Not baseline; only if the counter in §7 shows a regression.
@@ -324,7 +324,7 @@ firmware measured in Phase 1.
 
 ## 8. Logging
 
-- `/obs.csv` at 1 Hz (`OBS_PERIOD_MS = 1000`), file held open, `flush()` every 10 s, header written from `OBS_COLS` when the file is created.
+- `/obs.csv` at 1 Hz: rows formatted each second into a 2 KB RAM batch, written with one open/append/close every 10 s (the pattern `/gps.csv` has used reliably); header written from `OBS_COLS` when the file is created. A held-open `File` with `flush()` every 10 s was tried first and did not survive a power-off (2026-09-03).
 - `/gps.csv` unchanged.
 - SD errors set `sdOk = false` and the existing badge shows `SD!`; `initSd()` retries on the next row as today.
 - Optional, later: one JSON line per second on USB serial for a PC capture script.

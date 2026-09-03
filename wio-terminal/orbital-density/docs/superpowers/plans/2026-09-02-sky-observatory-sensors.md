@@ -1129,7 +1129,7 @@ git commit -m "orbital-density: integrate MLX90614 thermal sky sensor"
 
 **Interfaces:**
 - Consumes: every `xxxOk`/value global from Tasks 7–8 (Task 9 only under `MLX_ENABLED`), `bmeOk/bmeTemp/bmeHum/bmePres`, `loopMaxMsLast`, `gps`, `countInView()`, `sdOk`, `SD`.
-- Produces: `struct Observation; Observation obs;` `bool obsHeader(char*, size_t); bool obsRow(const Observation&, char*, size_t);` sketch-side `void assembleObservation(); void logObs();` `uint32_t obsRowsWritten, obsWriteErrors; bool obsOpen;` `const int OBS_EVERY_N;`
+- Produces: `struct Observation; Observation obs;` `bool obsHeader(char*, size_t); bool obsRow(const Observation&, char*, size_t);` sketch-side `void assembleObservation(); void logObs();` `uint32_t obsRowsWritten, obsWriteErrors; uint16_t obsRowsBuffered;` `const int OBS_EVERY_N;`
 
 - [x] **Step 1: Write `observation.h`**
 
@@ -1231,28 +1231,38 @@ Add after the `mmc5603.h` include:
 #include "observation.h"       // unified 1 Hz record + /obs.csv column table
 ```
 
-Insert this block in `m2_skyview.ino` immediately **before** `void initSd() {`:
+Insert this block in `m2_skyview.ino` immediately **before** `void initSd() {` (revised 2026-09-03: the first version kept the `File` open and called `flush()` every 10 s; after a power-off `/obs.csv` was not on the card, so rows are now batched in RAM and written open/write/close every 10 s like `/gps.csv`):
 
 ```cpp
 // ---------- observation log (/obs.csv, one row per second) ----------
-// Separate from /gps.csv (60 s, legacy schema). File stays open; flushed every 10 s so a
-// 1 Hz cadence costs one buffered print per second, not an open/close on the card.
-// OBS_EVERY_N = 1 logs every second; raise it (e.g. 10) to log every N seconds.
+// Separate from /gps.csv (60 s, legacy schema). Rows are formatted every second into a RAM
+// batch and written with ONE open/append/close every OBS_BATCH_MS — the same pattern
+// /gps.csv has used reliably. Keeping a File open across seconds and relying on flush() was
+// tried first (2026-09-03) and the file never appeared on the card after a power-off.
+// A power cut loses at most one batch. OBS_EVERY_N = 1 logs every second; raise it to
+// log every N seconds.
 const char*    OBS_PATH     = "/obs.csv";
 const int      OBS_EVERY_N  = 1;
-const uint32_t OBS_FLUSH_MS = 10000;
-File     obsFile;
-bool     obsOpen = false;
-uint32_t lastObsFlushMs = 0;
+const uint32_t OBS_BATCH_MS = 10000;
+char     obsBatch[2048];               // ~10 rows of ~180 bytes
+size_t   obsBatchLen = 0;
+uint16_t obsRowsBuffered = 0;
+uint32_t lastObsWriteMs = 0;
 uint32_t obsRowsWritten = 0, obsWriteErrors = 0;
+
+// GNSS date+time as ISO-8601, or "" if not (yet) trustworthy. TinyGPS++ marks the date valid
+// as soon as an RMC sentence parses, even with an empty date field (seen as "2000-00-00").
+void gnssUtc(char* out, size_t n) {
+  if (gps.date.isValid() && gps.time.isValid() && gps.date.year() >= 2020)
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             gps.date.year(), gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  else out[0] = 0;
+}
 
 void assembleObservation() {
   obs.uptimeS = millis() / 1000;
-  if (gps.date.isValid() && gps.time.isValid())
-    snprintf(obs.utc, sizeof(obs.utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-             gps.date.year(), gps.date.month(), gps.date.day(),
-             gps.time.hour(), gps.time.minute(), gps.time.second());
-  else obs.utc[0] = 0;
+  gnssUtc(obs.utc, sizeof(obs.utc));
   obs.fixValid = gps.location.isValid();
   obs.lat  = obs.fixValid ? gps.location.lat() : 0.0;
   obs.lon  = obs.fixValid ? gps.location.lng() : 0.0;
@@ -1274,25 +1284,30 @@ void assembleObservation() {
   obs.loopMaxMs = (uint16_t)loopMaxMsLast;
 }
 
-bool obsOpenFile() {
-  if (!sdOk) return false;
+// Write the RAM batch to the card: open, (header if new), write, close.
+void obsFlushToCard() {
+  lastObsWriteMs = millis();
+  if (obsBatchLen == 0) return;
+  if (!sdOk) return;                          // keep buffering; logRow() re-inits the card
   bool isNew = !SD.exists(OBS_PATH);
-  obsFile = SD.open(OBS_PATH, FILE_APPEND);
-  if (!obsFile) return false;
-  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) obsFile.print(h); }
-  lastObsFlushMs = millis();
-  obsOpen = true;
-  return true;
+  File f = SD.open(OBS_PATH, FILE_APPEND);
+  if (!f) { obsWriteErrors++; sdOk = false; return; }
+  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) f.print(h); }
+  size_t w = f.write((const uint8_t*)obsBatch, obsBatchLen);
+  f.close();
+  if (w == obsBatchLen) obsRowsWritten += obsRowsBuffered; else obsWriteErrors++;
+  obsBatchLen = 0; obsRowsBuffered = 0;
 }
 
 void logObs() {
-  if (!sdOk) { if (obsOpen) { obsFile.close(); obsOpen = false; } return; }   // logRow() re-inits the card
-  if (!obsOpen && !obsOpenFile()) return;
   char row[512];
   if (!obsRow(obs, row, sizeof(row))) return;
-  if (obsFile.print(row) == 0) { obsWriteErrors++; obsFile.close(); obsOpen = false; return; }
-  obsRowsWritten++;
-  if (millis() - lastObsFlushMs >= OBS_FLUSH_MS) { lastObsFlushMs = millis(); obsFile.flush(); }
+  size_t n = strlen(row);
+  if (obsBatchLen + n >= sizeof(obsBatch)) obsFlushToCard();     // batch full: write early
+  if (obsBatchLen + n < sizeof(obsBatch)) {
+    memcpy(obsBatch + obsBatchLen, row, n); obsBatchLen += n; obsRowsBuffered++;
+  }
+  if (millis() - lastObsWriteMs >= OBS_BATCH_MS) obsFlushToCard();
 }
 ```
 
@@ -1320,7 +1335,7 @@ Upload with the SD card in, run 3 minutes, power off, read the card on a PC:
 - `/obs.csv` exists, first line is the 29-name header, then ~1 row per second;
 - `utc` blank before the first fix, ISO-8601 after; the three `mlx_*` fields empty on every row (sensor deferred);
 - unplug the TSL2591 for a minute during the run: `tsl_*` fields empty (not `0`) for those rows, `sensors_ok` drops by 1;
-- `loop_max_ms` column: the periodic `flush()` should show as an occasional bump every ~10 s; `nmeaFail` growth still within baseline over 5 minutes. If not, raise `OBS_FLUSH_MS` to 30000 first, then consider `OBS_EVERY_N`.
+- `loop_max_ms` column: the 10 s batch write should show as an occasional bump; `nmeaFail` growth still within baseline over 5 minutes. If not, raise `OBS_FLUSH_MS` to 30000 first, then consider `OBS_EVERY_N`.
 
 Quick sanity check on the PC:
 
@@ -1329,6 +1344,8 @@ head -3 obs.csv; awk -F, 'NR>1{n++} END{print n" rows"}' obs.csv
 ```
 
 Result 2026-09-03: 5 min with a 3D fix: 299 rows in 300 s, 0 write errors, loopMax median 139 ms / max 156 ms (10 s flush), NMEA pass 12.5/s, fail 0.00/s. Card contents (header, empty `mlx_*` fields) to be checked at the Task 12 card pull.
+
+Card check 2026-09-03 (second attempt, after switching to the batched open/write/close writer): `/obs.csv` present, 29-name header, 1 row/s, `mlx_*` empty, `sensors_ok`=13, `loop_max_ms` 130–133 with ~50 ms bumps at the 10 s batch write. First attempt (held-open file + flush) left no file on the card after power-off.
 
 - [x] **Step 5: Commit**
 
@@ -1491,7 +1508,7 @@ git commit -m "orbital-density: table-driven pages, 5-way navigation, compile-ti
 - Consumes: `spr`, `gps`, all sensor globals (Tasks 7–8; Task 9 only under `MLX_ENABLED`), `i2cFound/i2cFoundCount` (Task 6), `loopMaxMsLast/loopIterLast` (Task 5), `obsRowsWritten/obsWriteErrors/obsOpen` (Task 10), `batOk`, `bmeOk`, `BME_ADDR`.
 - Produces: `void drawSeries(const int16_t* v, int len, int X, int Y, int W, int H, int minSpan, uint16_t colour, const char* unit); void drawSkySensors(); void drawMag(); void drawSensors(); const char* skyConditionLabel();`
 
-- [ ] **Step 1: Write `pages_sensors.h`**
+- [x] **Step 1: Write `pages_sensors.h`**
 
 ```cpp
 // pages_sensors.h — display pages for the sky-observatory sensors. Included from
@@ -1640,7 +1657,7 @@ void drawSensors() {
   y += 18;
   snprintf(l, sizeof(l), "loop max %lu ms   iter/s %lu", (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast); spr.drawString(l, 8, y); y += 14;
   snprintf(l, sizeof(l), "NMEA pass %lu  fail %lu", (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum()); spr.drawString(l, 8, y); y += 14;
-  snprintf(l, sizeof(l), "obs rows %lu  write err %lu  %s", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors, obsOpen ? "open" : "closed"); spr.drawString(l, 8, y); y += 14;
+  snprintf(l, sizeof(l), "obs rows %lu  write err %lu  buffered %u", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors, (unsigned)obsRowsBuffered); spr.drawString(l, 8, y); y += 14;
 #if MLX_ENABLED
   snprintf(l, sizeof(l), "tsl err %lu  mag err %lu  mlx err %lu", (unsigned long)tslErrCount, (unsigned long)magErrCount, (unsigned long)mlxErrCount);
 #else
@@ -1650,7 +1667,7 @@ void drawSensors() {
 }
 ```
 
-- [ ] **Step 2: Include and register the pages**
+- [x] **Step 2: Include and register the pages**
 
 Immediately above the `// ---------- page table ----------` comment add:
 
@@ -1666,17 +1683,19 @@ Append to `PAGES[]` after `{"Obs",    drawObs},`:
   {"Sensors", drawSensors},
 ```
 
-- [ ] **Step 3: Compile**
+- [x] **Step 3: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview
 ```
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
 Upload. Expected: eight pages; SkySens shows live lux / IR fraction, "Sky IR   not installed" and Condition `--`; Mag shows |B|, heading and X/Y/Z; Sensors lists four devices green with `Ns ago` ticking, the boot scan addresses, loop max, NMEA counters and obs rows climbing by ~1/s. Unplug a sensor: its row turns red within a second (TSL/MAG) and its page shows "missing". After 10+ minutes both new charts have their first points. Ask the user for three screenshots (`docs/page-skysens.jpg`, `docs/page-mag.jpg`, `docs/page-sensors.jpg`), EXIF-stripped like the existing ones.
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: user confirmed navigation (KEY_C / 5-way right forward, left back, centre = backlight) and all eight pages render. Screenshots pending. The card pull found `/gps.csv` but **no `/obs.csv`** → Task 10's held-open-file writer replaced by the batched open/write/close writer (see Task 10); re-verification passed at the second card pull.
+
+- [x] **Step 5: Commit** (screenshots to be added when taken)
 
 ```bash
 git add wio-terminal/orbital-density/firmware/m2_skyview wio-terminal/orbital-density/docs/page-skysens.jpg wio-terminal/orbital-density/docs/page-mag.jpg wio-terminal/orbital-density/docs/page-sensors.jpg
@@ -1694,7 +1713,7 @@ git commit -m "orbital-density: add SkySens, Mag and Sensors pages"
 
 **Interfaces:** none (docs only).
 
-- [ ] **Step 1: README — hardware and wiring**
+- [x] **Step 1: README — hardware and wiring**
 
 In the Hardware list add three bullets after the BME280 line:
 
@@ -1779,7 +1798,7 @@ Sensors page) misses a device intermittently, remove one board's pull-up resisto
 
 Fix the earlier claim: change "the firmware auto-detects both" (0x76/0x77) to "`m1_bme280` auto-detects both; `m2_skyview` is hard-coded to 0x77".
 
-- [ ] **Step 2: README — firmware, pages, log, libraries, calibration**
+- [x] **Step 2: README — firmware, pages, log, libraries, calibration**
 
 Change "All six display pages" to "All eight display pages" and add the three new pages to the page descriptions with their screenshots:
 
@@ -1811,7 +1830,7 @@ Libraries list: add `Adafruit MMC56x3` (and `Adafruit MLX90614 Library` once the
 
 Add a "Magnetometer calibration" subsection pointing at `tools/mag_calib.py` and the constants `MAG_OFF_X/Y/Z`, `MAG_MOUNT_OFFSET_DEG`, `MAG_DECLINATION_DEG` in `mmc5603.h` (procedure is in Task 14).
 
-- [ ] **Step 3: AGENTS.md**
+- [x] **Step 3: AGENTS.md**
 
 - Structure list: add `firmware/m1_i2c_scan/`, `m1_tsl2591/`, `m1_mmc5603/`, `m1_mlx90614/` bring-up entries; describe `m2_skyview/` as "the sketch plus header-only modules (`*.h`) in the same folder".
 - Libraries line: append `Adafruit MMC56x3`, `Adafruit MLX90614 Library`.
@@ -1827,11 +1846,11 @@ table and the observation log. Nothing in `loop()` may block: the UART buffer is
 - Testing: add "Check `loopMax` and `nmeaFail` in the 1 Hz status line against the baseline in README before and after any loop change; confirm `/obs.csv` rows for logging changes."
 - Documentation line: mention `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 
-- [ ] **Step 4: Concept doc notes**
+- [x] **Step 4: Concept doc notes**
 
 In `wio-sky-observatory-integration.md`: under the sensor table add "> SHT40 and the separate pressure sensor are superseded by the BME280 already in the firmware (decision 2026-09-02)." Under the GNSS screen mock-up add "> Galileo is not receivable on the Air530's AT6558R; the real page shows GPS/GLONASS/BeiDou/QZSS." Add to the I²C section: "> Implemented: see `docs/superpowers/specs/2026-09-02-sky-observatory-sensors-design.md` and README 'Sky-observatory sensors'."
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add wio-terminal/orbital-density/README.md wio-terminal/orbital-density/AGENTS.md wio-terminal/orbital-density/wio-sky-observatory-integration.md wio-terminal/orbital-density/docs/superpowers
