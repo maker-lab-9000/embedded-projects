@@ -1348,7 +1348,7 @@ git commit -m "orbital-density: add unified Observation record and 1 Hz /obs.csv
 - Consumes: nothing new (the three new page functions are added in Task 12; this task adds the table with the **existing** pages and Task 12 appends rows).
 - Produces: `typedef void (*PageFn)(); struct PageDef { const char* name; PageFn draw; }; const PageDef PAGES[]; int pageCount();` — Task 12 appends to `PAGES`.
 
-- [ ] **Step 1: Dust gate**
+- [x] **Step 1: Dust gate**
 
 After the `#include "observation.h"` line add:
 
@@ -1384,7 +1384,9 @@ In `logRow()`, before the `f.printf(` call add:
 
 and in the format string change `%s,%.2f,%.1f,%.2f` (the `anom,dust_ratio,dust_conc,temp_c` part) to `%s,%s,%s,%.2f`, replacing the arguments `dustRatio, dustConc` with `dustR, dustC`.
 
-- [ ] **Step 2: Page table and dispatch**
+**Done differently (2026-09-03):** the row is now formatted with `snprintf` into a 200-byte buffer and written with `f.print(row)`. `File::printf()` inherits `Print::printf()`'s 80-byte `PRINTF_BUF`, so the ~90-character `/gps.csv` row had been silently truncated (weather column lost) since the BME280 was added.
+
+- [x] **Step 2: Page table and dispatch**
 
 Replace the whole `drawPage()` function with:
 
@@ -1421,7 +1423,7 @@ void drawPage() {
 }
 ```
 
-- [ ] **Step 3: Buttons**
+- [x] **Step 3: Buttons**
 
 Replace `pollButtons()` with:
 
@@ -1460,7 +1462,7 @@ In `setup()`, after `pinMode(WIO_5S_PRESS, INPUT_PULLUP);` add:
   pinMode(WIO_5S_RIGHT, INPUT_PULLUP);
 ```
 
-- [ ] **Step 4: Compile**
+- [x] **Step 4: Compile**
 
 ```bash
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal wio-terminal/orbital-density/firmware/m2_skyview

@@ -31,6 +31,10 @@
 // Set to 1 after running the deferred Tasks 4 and 9.
 #define MLX_ENABLED 0
 #include "observation.h"       // unified 1 Hz record + /obs.csv column table
+// The Grove Dust Sensor is temporarily out of the build (sky-observatory milestone). With
+// it unplugged D0 floats and pollDust() would log noise, so 0 compiles out polling, the
+// Dust page and its history; /gps.csv keeps its columns with empty dust fields.
+#define DUST_ENABLED 0
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -788,12 +792,28 @@ void drawDetail() {
   row(l);
 }
 
+bool prev5L = HIGH, prev5R = HIGH;
+
+void gotoPage(int p) {
+  int n = pageCount();
+  page = ((p % n) + n) % n;
+  if (screenOn) drawPage();
+}
+
 void pollButtons() {
-  bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 6; if (screenOn) drawPage(); }
+  bool k = digitalRead(WIO_KEY_C);              // top-left button: next page (legacy)
+  if (prevKeyC == HIGH && k == LOW) gotoPage(page + 1);
   prevKeyC = k;
 
-  bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
+  bool r = digitalRead(WIO_5S_RIGHT);           // 5-way right: next page
+  if (prev5R == HIGH && r == LOW) gotoPage(page + 1);
+  prev5R = r;
+
+  bool l = digitalRead(WIO_5S_LEFT);            // 5-way left: previous page
+  if (prev5L == HIGH && l == LOW) gotoPage(page - 1);
+  prev5L = l;
+
+  bool s5 = digitalRead(WIO_5S_PRESS);          // 5-way centre press: screen on/off
   if (prev5s == HIGH && s5 == LOW) setScreen(!screenOn);
   prev5s = s5;
 }
@@ -1210,21 +1230,46 @@ void logRow() {
     snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
              gps.date.year(), gps.date.month(), gps.date.day(),
              gps.time.hour(), gps.time.minute(), gps.time.second());
-  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%.2f,%.1f,%.2f,%.1f,%.1f,%s\n",
+  char dustR[12] = "", dustC[12] = "";
+#if DUST_ENABLED
+  snprintf(dustR, sizeof(dustR), "%.2f", dustRatio);
+  snprintf(dustC, sizeof(dustC), "%.1f", dustConc);
+#endif
+  // Built with snprintf: File::printf() inherits Print::printf()'s 80-char buffer (PRINTF_BUF)
+  // and silently truncated this ~90-char row before 2026-09-03.
+  char row[200];
+  snprintf(row, sizeof(row), "%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%s,%s,%.2f,%.1f,%.1f,%s\n",
            utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
            countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
-           anomCode, dustRatio, dustConc, bmeTemp, bmeHum, bmePres, wxLabel());
+           anomCode, dustR, dustC, bmeTemp, bmeHum, bmePres, wxLabel());
+  f.print(row);
   f.close();
 }
+
+// ---------- page table ----------
+// Add a page = add one row. Navigation: KEY_C and 5-way RIGHT go forward, 5-way LEFT back.
+typedef void (*PageFn)();
+struct PageDef { const char* name; PageFn draw; };
+const PageDef PAGES[] = {
+  {"Sky",    drawSky},
+  {"Detail", drawDetail},
+  {"Chart",  drawChart},
+#if DUST_ENABLED
+  {"Dust",   drawDust},
+#endif
+  {"Env",    drawEnv},
+  {"Obs",    drawObs},
+};
+int pageCount() { return (int)(sizeof(PAGES) / sizeof(PAGES[0])); }
 
 void drawPage() {
   spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
-  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else if (page == 3) drawDust(); else if (page == 4) drawEnv(); else drawObs();
+  PAGES[page].draw();
   if (anomalyActive()) {   // reception-health alert banner, over any page
     spr.fillRect(0, 224, 320, 16, TFT_RED);
     spr.setTextSize(2);
@@ -1259,6 +1304,8 @@ void setup() {
 
   pinMode(WIO_KEY_C, INPUT_PULLUP);
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
+  pinMode(WIO_5S_LEFT, INPUT_PULLUP);
+  pinMode(WIO_5S_RIGHT, INPUT_PULLUP);
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
 
@@ -1279,10 +1326,12 @@ void setup() {
   spr.createSprite(320, 240);   // ~77 KB off-screen buffer for flicker-free blits
   initSd();
 
+#if DUST_ENABLED
   pinMode(DUST_PIN, INPUT);
   dustWindowStart = millis();
   dustWasLow = (digitalRead(DUST_PIN) == LOW);
   dustFallAtUs = micros();
+#endif
 }
 
 // Constellation mode toggle: alternate GPS+BDS / GPS+GLONASS every 45s
@@ -1297,7 +1346,9 @@ void loop() {
   loopStatsTick();
   feedGps();
   pollButtons();
+#if DUST_ENABLED
   pollDust();
+#endif
   tslPoll();
   magPoll();
 
@@ -1318,7 +1369,9 @@ void loop() {
     lastHistMs = millis();
     expireSats();
     pushHist(countInView(), countInView() - countPositioned());
+#if DUST_ENABLED
     pushDustHist(dustRatio);
+#endif
     pushConstelHist();
     magPushHist();
     if (bmeOk) { pushEnvHist(); evalWeather(); }
