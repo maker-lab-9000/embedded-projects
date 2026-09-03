@@ -86,11 +86,50 @@ display:
     invert_colors: true      # IPS panel: Waveshare's demo constructs Arduino_ST7789 with ips=true
     color_order: bgr
     rotation: 0
-    update_interval: 1s      # test pattern only; Task 4 switches to LVGL (update_interval: never)
-    lambda: |-
-      it.fill(Color::BLACK);
-      it.filled_rectangle(0, 0, 120, 80, Color(255, 0, 0));         // top-left RED
-      it.filled_rectangle(120, 0, 120, 80, Color(0, 255, 0));       // top-right GREEN
-      it.filled_rectangle(0, 240, 120, 80, Color(0, 0, 255));       // bottom-left BLUE
-      it.filled_rectangle(120, 240, 120, 80, Color(255, 255, 255)); // bottom-right WHITE
-      it.rectangle(0, 0, 240, 320, Color(255, 255, 0));             // yellow 1-px border
+    auto_clear_enabled: false
+    update_interval: never   # LVGL drives redraws
+
+i2c:
+  id: i2c_tp
+  sda: GPIO48
+  scl: GPIO47
+  frequency: 400kHz
+
+touchscreen:
+  - platform: cst816
+    id: touch
+    i2c_id: i2c_tp
+    address: 0x15
+    display: lcd
+    update_interval: 50ms
+    on_touch:
+      - lambda: 'ESP_LOGI("touch", "x=%d y=%d", touch.x, touch.y);'
+
+lvgl:
+  displays: [lcd]
+  touchscreens: [touch]
+  buffer_size: 100%
+  default_font: montserrat_20
+  pages:
+    - id: page_test
+      bg_color: 0x000000
+      widgets:
+        - label:
+            id: lbl_test
+            align: CENTER
+            text_color: 0xFFFFFF
+            text: "Touch me"
+        - button:
+            id: btn_test
+            x: 70
+            y: 220
+            width: 100
+            height: 50
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "Tap"
+            on_click:
+              - lvgl.label.update:
+                  id: lbl_test
+                  text: "Tapped!"

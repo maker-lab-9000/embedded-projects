@@ -277,7 +277,7 @@ git commit -m "waveshare: ST7789 display over mipi_spi with PWM backlight and co
 **Interfaces:**
 - Produces: `touchscreen: touch` (cst816), `lvgl:` with `page_test`. Later tasks replace `page_test` with the real pages.
 
-- [ ] **Step 1: Switch the display to LVGL mode**
+- [x] **Step 1: Switch the display to LVGL mode**
 
 In the `display:` block delete `update_interval: 1s` and the whole `lambda:`; add:
 
@@ -286,7 +286,7 @@ In the `display:` block delete `update_interval: 1s` and the whole `lambda:`; ad
     update_interval: never
 ```
 
-- [ ] **Step 2: Append touch and a test page**
+- [x] **Step 2: Append touch and a test page**
 
 ```yaml
 i2c:
@@ -335,7 +335,7 @@ lvgl:
                   text: "Tapped!"
 ```
 
-- [ ] **Step 3: Validate, compile, flash**
+- [x] **Step 3: Validate, compile, flash**
 
 ```bash
 esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
@@ -343,7 +343,7 @@ esphome run waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
 
 Then keep the log open: `esphome logs waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml`.
 
-- [ ] **Step 4: Hardware checkpoint (user)**
+- [x] **Step 4: Hardware checkpoint (user)**
 
 Expected: "Touch me" centred, a "Tap" button near the bottom. Touching logs `x= y=` with x growing left→right (0..239) and y top→bottom (0..319). Tapping the button changes the label to "Tapped!".
 - Log shows `Failed to read chip id` / no touches → add `skip_probe: true` under the touchscreen.
@@ -358,7 +358,9 @@ Expected: "Touch me" centred, a "Tap" button near the bottom. Touching logs `x= 
 
 and flip the one that fixes it (mirror_x if x runs right→left, mirror_y if y runs bottom→top, swap_xy if a horizontal finger move changes y).
 
-- [ ] **Step 5: Commit**
+Result 2026-09-03: passed without transform or skip_probe. Corners read TL (36–68, 14–39), TR (186–212, 6–55), BL (13–23, 317), BR (195–199, 295–310); button taps (120–137, 224–245); "Tapped!" appeared. Boot log shows one `i2c.idf: Performing bus recovery` (harmless) and a one-off `lvgl took a long time (56 ms)` on first render. A phantom sample at (63, 319) recurs, likely a release artefact of the CST816D — keep interactive widgets a few px away from the very bottom edge.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add waveshare/esp32-s3-touch-lcd-2/esphome/lcd2.yaml
