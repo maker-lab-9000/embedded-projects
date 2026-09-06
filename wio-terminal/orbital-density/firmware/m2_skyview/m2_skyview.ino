@@ -22,6 +22,39 @@
 #include "SD/Seeed_SD.h"
 #include <Wire.h>
 #include <SparkFunBQ27441.h>   // fuel gauge on the 650 mAh battery chassis
+#include "loopstats.h"         // loop max-time + iteration counters (see Sensors page / status line)
+#include "i2c_bus.h"           // 100 kHz clock constant, presence probe, boot scan
+#include "tsl2591.h"           // optical sky (0x29), register-level non-blocking driver
+#include "mmc5603.h"           // magnetometer (0x30) on the arm; continuous 10 Hz, auto set/reset
+// MLX90614 / GY-906 is deferred until its header is soldered. 0 = driver not compiled, the
+// mlx_* CSV columns stay in the schema (written empty), pages say "not installed".
+// Set to 1 after running the deferred Tasks 4 and 9.
+#define MLX_ENABLED 0
+#include "observation.h"       // unified 1 Hz record + /obs.csv column table
+// The Grove Dust Sensor is temporarily out of the build (sky-observatory milestone). With
+// it unplugged D0 floats and pollDust() would log noise, so 0 compiles out polling, the
+// Dust page and its history; /gps.csv keeps its columns with empty dust fields.
+#define DUST_ENABLED 0
+
+// ---------- TSL2591 24 h history (Task 16) ----------
+// One sample / 5 min. Each channel is stored as log10 of its gain/integration-normalised rate
+// (counts per ms at 1x gain) x100 in an int16: comparable across auto-range steps and spanning
+// daylight to dark sky on one axis. Saturated samples are skipped so a torch or direct sun
+// does not paint a false plateau.
+Ring<int16_t, SENSOR_HIST_N> tslVisHist, tslIrHist;
+
+int16_t tslLogNorm(uint16_t counts) {
+  float norm = (float)counts / ((float)tslIntegMs * TSL_GAIN_X[tslGainIdx]);
+  if (norm < 1e-6f) norm = 1e-6f;
+  return (int16_t)lroundf(log10f(norm) * 100.0f);
+}
+
+void tslPushHist() {
+  if (!tslOk || tslSat) return;
+  uint16_t vis = tslFull >= tslIr ? tslFull - tslIr : 0;
+  tslVisHist.push(tslLogNorm(vis));
+  tslIrHist.push(tslLogNorm(tslIr));
+}
 
 TinyGPSPlus gps;
 TFT_eSPI tft;
@@ -29,6 +62,7 @@ TFT_eSprite spr = TFT_eSprite(&tft);   // off-screen buffer: draw here, blit onc
 
 bool batOk = false;            // BQ27441 present (battery chassis)
 bool screenOn = true;
+bool skyHeadingUp = false;     // Sky page: false = north-up, true = heading-up (5-way UP toggles); used by drawSky()
 bool prev5s = HIGH;
 void setScreen(bool on);       // defined after the draw functions
 void drawPage();
@@ -667,17 +701,39 @@ void drawSky() {
   spr.drawCircle(CX, CY, R, TFT_DARKGREY);
   spr.drawCircle(CX, CY, R * 2 / 3, TFT_DARKGREY);
   spr.drawCircle(CX, CY, R / 3, TFT_DARKGREY);
+  // Orientation: north-up by default; heading-up rotates the whole plot by -heading so the
+  // top of the screen is the direction the device points. Raw MAGNETIC heading from the
+  // MMC5603 until MAG_MOUNT_OFFSET_DEG / MAG_DECLINATION_DEG / hard-iron offsets are set.
+  float rot = (skyHeadingUp && magOk) ? -magMeanHeading : 0.0f;
   spr.setTextSize(1);
-  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  spr.drawString("N", CX - 2, CY - R - 10);
-  spr.drawString("S", CX - 2, CY + R + 2);
-  spr.drawString("E", CX + R + 2, CY - 3);
-  spr.drawString("W", CX - R - 10, CY - 3);
+  static const char* dirName[4] = {"N", "E", "S", "W"};
+  for (int d = 0; d < 4; d++) {
+    float da = (d * 90.0f + rot) * 0.017453292f;
+    int lx = CX + (int)((R + 9) * sinf(da)) - 2;
+    int ly = CY - (int)((R + 9) * cosf(da)) - 3;
+    spr.setTextColor(d == 0 ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(dirName[d], lx, ly);
+  }
   drawLegend();
+  // Heading marker: orange wedge on the ring where the device points, plus a readout.
+  spr.setTextSize(1);
+  if (magOk) {
+    float ha = (magMeanHeading + rot) * 0.017453292f;
+    int tx  = CX + (int)((R - 7) * sinf(ha)),         ty  = CY - (int)((R - 7) * cosf(ha));
+    int b1x = CX + (int)((R + 5) * sinf(ha - 0.08f)), b1y = CY - (int)((R + 5) * cosf(ha - 0.08f));
+    int b2x = CX + (int)((R + 5) * sinf(ha + 0.08f)), b2y = CY - (int)((R + 5) * cosf(ha + 0.08f));
+    spr.fillTriangle(tx, ty, b1x, b1y, b2x, b2y, TFT_ORANGE);
+    char h[28]; snprintf(h, sizeof(h), "Hdg %3.0f mag  %s", magMeanHeading, skyHeadingUp ? "H-UP" : "N-UP");
+    spr.setTextColor(TFT_ORANGE, TFT_BLACK);
+    spr.drawString(h, 4, 26);
+  } else {
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(skyHeadingUp ? "Hdg -- no mag  N-UP" : "Hdg --", 4, 26);
+  }
   for (int i = 0; i < satCount; i++) {
     if (sats[i].elev < 0) continue;   // position not yet known: skip on the map
     float r = R * (90 - sats[i].elev) / 90.0f;
-    float a = sats[i].azim * 0.017453292f;   // deg->rad
+    float a = (sats[i].azim + rot) * 0.017453292f;   // deg->rad, rotated for heading-up
     int x = CX + (int)(r * sinf(a));
     int y = CY - (int)(r * cosf(a));
     int rad = sats[i].snr >= 40 ? 4 : (sats[i].snr >= 25 ? 3 : 2);
@@ -694,7 +750,7 @@ void drawSky() {
     uint16_t col = bodyColor[b];
     if (bodies[b].alt > 0) {
       float rr = R * (90 - bodies[b].alt) / 90.0f;
-      float aa = bodies[b].az * 0.017453292f;
+      float aa = (bodies[b].az + rot) * 0.017453292f;
       int bx = CX + (int)(rr * sinf(aa));
       int by = CY - (int)(rr * cosf(aa));
       if (b == B_SUN) {
@@ -736,7 +792,7 @@ void drawSky() {
 
 // ---------- detail page ----------
 
-int  page = 0;              // 0 = sky, 1 = detail, 2 = chart
+int  page = 0;              // index into PAGES[]
 bool prevKeyC = HIGH;
 
 // satellite history for the chart: per-constellation + unlocated, over 24 h
@@ -779,12 +835,32 @@ void drawDetail() {
   row(l);
 }
 
+bool prev5L = HIGH, prev5R = HIGH, prev5U = HIGH;
+
+void gotoPage(int p) {
+  int n = pageCount();
+  page = ((p % n) + n) % n;
+  if (screenOn) drawPage();
+}
+
 void pollButtons() {
-  bool k = digitalRead(WIO_KEY_C);
-  if (prevKeyC == HIGH && k == LOW) { page = (page + 1) % 6; if (screenOn) drawPage(); }
+  bool k = digitalRead(WIO_KEY_C);              // top-left button: next page (legacy)
+  if (prevKeyC == HIGH && k == LOW) gotoPage(page + 1);
   prevKeyC = k;
 
-  bool s5 = digitalRead(WIO_5S_PRESS);   // 5-way center press: screen on/off
+  bool r = digitalRead(WIO_5S_RIGHT);           // 5-way right: next page
+  if (prev5R == HIGH && r == LOW) gotoPage(page + 1);
+  prev5R = r;
+
+  bool l = digitalRead(WIO_5S_LEFT);            // 5-way left: previous page
+  if (prev5L == HIGH && l == LOW) gotoPage(page - 1);
+  prev5L = l;
+
+  bool u = digitalRead(WIO_5S_UP);              // 5-way up: Sky page north-up <-> heading-up
+  if (prev5U == HIGH && u == LOW) { skyHeadingUp = !skyHeadingUp; if (screenOn) drawPage(); }
+  prev5U = u;
+
+  bool s5 = digitalRead(WIO_5S_PRESS);          // 5-way centre press: screen on/off
   if (prev5s == HIGH && s5 == LOW) setScreen(!screenOn);
   prev5s = s5;
 }
@@ -1117,9 +1193,90 @@ void drawObs() {
   spr.drawString(info, 4, 228);
 }
 
+// ---------- observation log (/obs.csv, one row per second) ----------
+// Separate from /gps.csv (60 s, legacy schema). Rows are formatted every second into a RAM
+// batch and written with ONE open/append/close every OBS_BATCH_MS — the same pattern
+// /gps.csv has used reliably. Keeping a File open across seconds and relying on flush() was
+// tried first (2026-09-03) and the file never appeared on the card after a power-off.
+// A power cut loses at most one batch. OBS_EVERY_N = 1 logs every second; raise it to
+// log every N seconds.
+const char*    OBS_PATH     = "/obs.csv";
+const int      OBS_EVERY_N  = 1;
+const uint32_t OBS_BATCH_MS = 10000;
+char     obsBatch[2048];               // ~10 rows of ~180 bytes
+size_t   obsBatchLen = 0;
+uint16_t obsRowsBuffered = 0;
+uint32_t lastObsWriteMs = 0;
+uint32_t obsRowsWritten = 0, obsWriteErrors = 0;
+
+// GNSS date+time as ISO-8601, or "" if not (yet) trustworthy. TinyGPS++ marks the date valid
+// as soon as an RMC sentence parses, even with an empty date field (seen as "2000-00-00").
+void gnssUtc(char* out, size_t n) {
+  if (gps.date.isValid() && gps.time.isValid() && gps.date.year() >= 2020)
+    snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+             gps.date.year(), gps.date.month(), gps.date.day(),
+             gps.time.hour(), gps.time.minute(), gps.time.second());
+  else out[0] = 0;
+}
+
+void assembleObservation() {
+  obs.uptimeS = millis() / 1000;
+  gnssUtc(obs.utc, sizeof(obs.utc));
+  obs.fixValid = gps.location.isValid();
+  obs.lat  = obs.fixValid ? gps.location.lat() : 0.0;
+  obs.lon  = obs.fixValid ? gps.location.lng() : 0.0;
+  obs.altM = gps.altitude.isValid() ? (float)gps.altitude.meters() : NAN;
+  obs.hdop = gps.hdop.isValid() ? (float)gps.hdop.hdop() : NAN;
+  obs.used = gps.satellites.isValid() ? (uint8_t)gps.satellites.value() : 0;
+  obs.inView = (uint8_t)countInView();
+  obs.fix  = gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none";
+  obs.tslOk = tslOk; obs.tslFull = tslFull; obs.tslIr = tslIr; obs.tslGain = tslGainName();
+  obs.tslIntegMs = tslIntegMs; obs.tslLux = tslLux; obs.tslSat = tslSat;
+#if MLX_ENABLED
+  obs.mlxOk = mlxOk; obs.mlxAmbC = mlxAmbC; obs.mlxObjC = mlxObjC; obs.mlxDeltaC = mlxDeltaC;
+#else
+  obs.mlxOk = false; obs.mlxAmbC = obs.mlxObjC = obs.mlxDeltaC = NAN;   // GY-906 deferred: columns stay, fields empty
+#endif
+  obs.magOk = magOk; obs.bx = magMeanX; obs.by = magMeanY; obs.bz = magMeanZ;
+  obs.bTotal = magMeanTotal; obs.headingDeg = magMeanHeading;
+  obs.bmeOk = bmeOk; obs.tempC = bmeTemp; obs.hum = bmeHum; obs.presHpa = bmePres;
+  obs.loopMaxMs = (uint16_t)loopMaxMsLast;
+}
+
+// Write the RAM batch to the card: open, (header if new), write, close.
+void obsFlushToCard() {
+  lastObsWriteMs = millis();
+  if (obsBatchLen == 0) return;
+  if (!sdOk) return;                          // keep buffering; logRow() re-inits the card
+  bool isNew = !SD.exists(OBS_PATH);
+  File f = SD.open(OBS_PATH, FILE_APPEND);
+  if (!f) { obsWriteErrors++; sdOk = false; return; }
+  if (isNew) { char h[512]; if (obsHeader(h, sizeof(h))) f.print(h); }
+  size_t w = f.write((const uint8_t*)obsBatch, obsBatchLen);
+  f.close();
+  if (w == obsBatchLen) obsRowsWritten += obsRowsBuffered; else obsWriteErrors++;
+  obsBatchLen = 0; obsRowsBuffered = 0;
+}
+
+void logObs() {
+  char row[512];
+  if (!obsRow(obs, row, sizeof(row))) return;
+  size_t n = strlen(row);
+  if (obsBatchLen + n >= sizeof(obsBatch)) obsFlushToCard();     // batch full: write early
+  if (obsBatchLen + n < sizeof(obsBatch)) {
+    memcpy(obsBatch + obsBatchLen, row, n); obsBatchLen += n; obsRowsBuffered++;
+  }
+  if (millis() - lastObsWriteMs >= OBS_BATCH_MS) obsFlushToCard();
+}
+
 void initSd() {
   sdOk = SD.begin(SDCARD_SS_PIN, SDCARD_SPI);
-  if (sdOk && !SD.exists(LOG_PATH)) {
+  bool needHeader = false;
+  if (sdOk) {
+    if (!SD.exists(LOG_PATH)) needHeader = true;
+    else { File t = SD.open(LOG_PATH, FILE_READ); needHeader = (t && t.size() == 0); if (t) t.close(); }
+  }
+  if (needHeader) {   // missing or empty file (seen after a card repair): (re)write the header
     File f = SD.open(LOG_PATH, FILE_APPEND);
     if (f) { f.println("utc,uptime_s,in_view,positioned,used,fix,hdop,gps,glonass,beidou,qzss,anom,dust_ratio,dust_conc,temp_c,humidity,pressure_hpa,weather"); f.close(); }
   }
@@ -1135,26 +1292,53 @@ void logRow() {
   if (!sdOk) { initSd(); if (!sdOk) return; }
   File f = SD.open(LOG_PATH, FILE_APPEND);
   if (!f) { sdOk = false; return; }
-  char utc[24] = "";
-  if (gps.date.isValid() && gps.time.isValid())
-    snprintf(utc, sizeof(utc), "%04d-%02d-%02dT%02d:%02d:%02dZ",
-             gps.date.year(), gps.date.month(), gps.date.day(),
-             gps.time.hour(), gps.time.minute(), gps.time.second());
-  f.printf("%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%.2f,%.1f,%.2f,%.1f,%.1f,%s\n",
+  char utc[24];
+  gnssUtc(utc, sizeof(utc));
+  char dustR[12] = "", dustC[12] = "";
+#if DUST_ENABLED
+  snprintf(dustR, sizeof(dustR), "%.2f", dustRatio);
+  snprintf(dustC, sizeof(dustC), "%.1f", dustConc);
+#endif
+  // Built with snprintf: File::printf() inherits Print::printf()'s 80-char buffer (PRINTF_BUF)
+  // and silently truncated this ~90-char row before 2026-09-03.
+  char row[200];
+  snprintf(row, sizeof(row), "%s,%lu,%d,%d,%d,%s,%.1f,%d,%d,%d,%d,%s,%s,%s,%.2f,%.1f,%.1f,%s\n",
            utc, (unsigned long)(millis() / 1000), countInView(), countPositioned(),
            gps.satellites.isValid() ? (int)gps.satellites.value() : 0,
            gps.location.isValid() ? (gps.altitude.isValid() ? "3D" : "2D") : "none",
            gps.hdop.isValid() ? gps.hdop.hdop() : 0.0,
            countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
-           anomCode, dustRatio, dustConc, bmeTemp, bmeHum, bmePres, wxLabel());
+           anomCode, dustR, dustC, bmeTemp, bmeHum, bmePres, wxLabel());
+  f.print(row);
   f.close();
 }
+
+#include "pages_sensors.h"     // SkySens / Mag / Sensors pages (needs spr, gps, sensors, obs stats)
+
+// ---------- page table ----------
+// Add a page = add one row. Navigation: KEY_C and 5-way RIGHT go forward, 5-way LEFT back.
+typedef void (*PageFn)();
+struct PageDef { const char* name; PageFn draw; };
+const PageDef PAGES[] = {
+  {"Sky",    drawSky},
+  {"Detail", drawDetail},
+  {"Chart",  drawChart},
+#if DUST_ENABLED
+  {"Dust",   drawDust},
+#endif
+  {"Env",    drawEnv},
+  {"Obs",    drawObs},
+  {"SkySens", drawSkySensors},
+  {"Mag",     drawMag},
+  {"Sensors", drawSensors},
+};
+int pageCount() { return (int)(sizeof(PAGES) / sizeof(PAGES[0])); }
 
 void drawPage() {
   spr.fillSprite(TFT_BLACK);
   drawHeader();
   drawSdBadge();
-  if (page == 0) drawSky(); else if (page == 1) drawDetail(); else if (page == 2) drawChart(); else if (page == 3) drawDust(); else if (page == 4) drawEnv(); else drawObs();
+  PAGES[page].draw();
   if (anomalyActive()) {   // reception-health alert banner, over any page
     spr.fillRect(0, 224, 320, 16, TFT_RED);
     spr.setTextSize(2);
@@ -1189,14 +1373,21 @@ void setup() {
 
   pinMode(WIO_KEY_C, INPUT_PULLUP);
   pinMode(WIO_5S_PRESS, INPUT_PULLUP);
+  pinMode(WIO_5S_LEFT, INPUT_PULLUP);
+  pinMode(WIO_5S_RIGHT, INPUT_PULLUP);
+  pinMode(WIO_5S_UP, INPUT_PULLUP);
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
 
   Wire.begin();                 // fuel gauge is optional (battery chassis only)
+  Wire.setClock(I2C_CLOCK_HZ);  // MLX90614 is SMBus: 100 kHz max for the whole hub
+  i2cScan();                    // echo what answered; shown on the Sensors page
   batOk = lipo.begin();
   if (batOk) lipo.setCapacity(650);
   bmeOk = bmeInit();
   if (bmeOk) bmeRead();
+  tslInit();                    // optical sky sensor (0x29); re-probed every 30 s if absent
+  magInit();                    // magnetometer (0x30); re-probed every 30 s if absent
 
   tft.begin();
   tft.setRotation(3);
@@ -1205,10 +1396,12 @@ void setup() {
   spr.createSprite(320, 240);   // ~77 KB off-screen buffer for flicker-free blits
   initSd();
 
+#if DUST_ENABLED
   pinMode(DUST_PIN, INPUT);
   dustWindowStart = millis();
   dustWasLow = (digitalRead(DUST_PIN) == LOW);
   dustFallAtUs = micros();
+#endif
 }
 
 // Constellation mode toggle: alternate GPS+BDS / GPS+GLONASS every 45s
@@ -1217,10 +1410,23 @@ const uint32_t MODE_TOGGLE_MS = 45000;
 uint32_t lastToggleMs = 0;   // set to millis() when everFixed first becomes true
 bool gnssModeBds = true;  // true = GPS+BDS, false = GPS+GLONASS
 
+uint32_t lastReprobeMs = 0;   // missing-sensor re-init cadence (hot-plug, flaky cable)
+
 void loop() {
+  loopStatsTick();
   feedGps();
   pollButtons();
+#if DUST_ENABLED
   pollDust();
+#endif
+  tslPoll();
+  magPoll();
+
+  if (millis() - lastReprobeMs >= I2C_REPROBE_MS) {
+    lastReprobeMs = millis();
+    if (!tslOk) tslInit();
+    if (!magOk) magInit();
+  }
 
   if (everFixed && millis() - lastToggleMs >= MODE_TOGGLE_MS) {
     lastToggleMs = millis();
@@ -1233,22 +1439,40 @@ void loop() {
     lastHistMs = millis();
     expireSats();
     pushHist(countInView(), countInView() - countPositioned());
+#if DUST_ENABLED
     pushDustHist(dustRatio);
+#endif
     pushConstelHist();
+    magPushHist();
+    tslPushHist();
     if (bmeOk) { pushEnvHist(); evalWeather(); }
   }
 
   if (millis() - lastPrint >= 1000) {
     lastPrint = millis();
+    loopStatsRoll();
     expireSats();
     evalAnomaly();
     computeBodies();
     if (bmeOk) bmeRead();
+    magRollSecond();
+    assembleObservation();
+    static uint8_t obsTick = 0;
+    if (++obsTick >= OBS_EVERY_N) { obsTick = 0; logObs(); }
     if (screenOn) drawPage();   // backlight-off: keep parsing + logging, skip drawing
-    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d | T=%.1f H=%.0f P=%.0f\n",
+    // Status line. NOTE: this core's Serial.printf() truncates at ~80 chars, so the line is
+    // built from several printf calls; each sensor module appends its own segment.
+    Serial.printf("inView=%d pos=%d used=%d %s | GPS=%d GLO=%d BDS=%d QZS=%d",
       countInView(), countPositioned(), gps.satellites.isValid()?(int)gps.satellites.value():-1, fixStr(),
-      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS),
-      bmeTemp, bmeHum, bmePres);
+      countConstel(C_GPS), countConstel(C_GLO), countConstel(C_BDS), countConstel(C_QZS));
+    Serial.printf(" | T=%.1f H=%.0f P=%.0f", bmeTemp, bmeHum, bmePres);
+    Serial.printf(" | loopMax=%lums iter=%lu nmeaPass=%lu nmeaFail=%lu",
+      (unsigned long)loopMaxMsLast, (unsigned long)loopIterLast,
+      (unsigned long)gps.passedChecksum(), (unsigned long)gps.failedChecksum());
+    Serial.printf(" | tsl full=%u ir=%u %s/%ums lux=%.3f", tslFull, tslIr, tslGainName(), tslIntegMs, tslLux);
+    Serial.printf(" | mag |B|=%.1f hdg=%.0f", magMeanTotal, magMeanHeading);
+    Serial.printf(" | obs rows=%lu err=%lu", (unsigned long)obsRowsWritten, (unsigned long)obsWriteErrors);
+    Serial.println();
   }
 
   if (millis() - lastLogMs >= LOG_PERIOD_MS) {
