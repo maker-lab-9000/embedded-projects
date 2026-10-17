@@ -3,7 +3,7 @@
 A plant monitor built on the M5StickS3 and a capacitive soil moisture sensor
 (v1.2) — the second device in this repo, a port of the
 [Wio Terminal monitor](../../wio-terminal/soil-moisture-monitor/) with the
-same measurements. Shows live moisture %, drying rate and a "water in ~X days"
+same measurements. Shows a mood face (happy/neutral/sad), live moisture %, drying rate and a "water in ~X days"
 estimate on the LCD, chirps when the plant needs water, and logs one sample
 per minute to internal flash so history survives reboots.
 
@@ -68,7 +68,8 @@ What each element on the dashboard means and the values it can show:
 |---------|---------|-----------------|
 | `Soil Moisture #2` | header; `#2` = sensor ID | fixed |
 | `FS` / `FS!` (top right) | internal-flash log status | green `FS` = logging OK; red `FS!` = mount or write failed (remount retried every minute) |
-| `76%` (large) | calibrated moisture, live reading (1 s refresh) | `0%`–`100%`, clamped; red < 30%, yellow 30–49%, green ≥ 50% |
+| face (left) | plant mood from the live reading | red sad face < 30% (needs water) · yellow neutral 30–49% (drying out) · green smiley ≥ 50% (well watered) |
+| `76%` (next to face) | calibrated moisture, live reading (1 s refresh) | `0%`–`100%`, clamped; same colour as the face |
 | rate (right column) | drying rate — least-squares slope over the last ≤ 6 h of 1-min means | `N/30m` (`N` = 0–29) for the first 30 min after boot/watering/reset, then signed `±D.DD %/h` (positive = getting wetter) |
 | ETA (below rate) | time until the 30% watering threshold, linear extrapolation | `ETA --` (still collecting) · `not drying` (rate ≥ −0.005 %/h) · `~Dd HHh` (days 0–99, hours 00–23) · `>99 days` · red `WATER NOW!` + chirp at ≤ 30% |
 | chart | last 48 h of 1-min moisture means (cyan), restored from flash on boot | y-axis fixed 0–100%; red dotted line = 30% threshold |
