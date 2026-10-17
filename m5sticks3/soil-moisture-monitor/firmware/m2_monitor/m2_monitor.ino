@@ -43,6 +43,11 @@ bool  lowAlerted = false;
 
 uint32_t lastSenseMs = 0;
 
+// Mood face tracks the same bands as the % colour: sad = needs water now,
+// neutral = drying out, happy = well watered.
+enum Mood { MOOD_NONE = -1, MOOD_SAD, MOOD_MEH, MOOD_HAPPY };
+Mood shownMood = MOOD_NONE;
+
 float histAt(long absIdx) { return history[absIdx % HISTORY_LEN]; }
 
 // ---------- sensor ----------
@@ -274,15 +279,37 @@ void drawFsBadge() {
   }
 }
 
+const int FACE_X = 22, FACE_Y = 41, FACE_R = 20;
+
+void drawFace(Mood mood, uint16_t color) {
+  M5.Display.fillCircle(FACE_X, FACE_Y, FACE_R, color);
+  M5.Display.fillCircle(FACE_X - 7, FACE_Y - 6, 3, TFT_BLACK);
+  M5.Display.fillCircle(FACE_X + 7, FACE_Y - 6, 3, TFT_BLACK);
+  if (mood == MOOD_HAPPY) {
+    M5.Display.fillArc(FACE_X, FACE_Y + 1, 9, 12, 25, 155, TFT_BLACK);
+  } else if (mood == MOOD_SAD) {
+    M5.Display.fillArc(FACE_X, FACE_Y + 15, 9, 12, 215, 325, TFT_BLACK);
+  } else {
+    M5.Display.fillRect(FACE_X - 8, FACE_Y + 7, 17, 3, TFT_BLACK);
+  }
+}
+
 void drawLive(float pct, uint16_t raw) {
   if (!screenOn) return;
-  uint16_t color = pct < WATER_THRESHOLD ? TFT_RED
-                 : (pct < 50 ? TFT_YELLOW : TFT_GREEN);
+  Mood mood = pct < WATER_THRESHOLD ? MOOD_SAD
+            : (pct < 50 ? MOOD_MEH : MOOD_HAPPY);
+  uint16_t color = mood == MOOD_SAD ? TFT_RED
+                 : (mood == MOOD_MEH ? TFT_YELLOW : TFT_GREEN);
+  if (mood != shownMood) {  // redraw only on change: no 1 s flicker
+    drawFace(mood, color);
+    shownMood = mood;
+  }
+
   char buf[8];
   snprintf(buf, sizeof(buf), "%3d%%", (int)(pct + 0.5f));
-  M5.Display.setTextSize(4);
+  M5.Display.setTextSize(2);
   M5.Display.setTextColor(color, TFT_BLACK);
-  M5.Display.drawString(buf, 0, 20);
+  M5.Display.drawString(buf, 48, 34);
 
   char diag[48];
   uint32_t upMin = millis() / 60000;
@@ -313,6 +340,7 @@ void setScreen(bool on) {
     M5.Display.wakeup();
     M5.Display.setBrightness(80);
     M5.Display.fillScreen(TFT_BLACK);
+    shownMood = MOOD_NONE;
     drawHeader();
     drawFsBadge();
     drawSparkline();
