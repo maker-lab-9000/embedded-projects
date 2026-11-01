@@ -75,11 +75,24 @@ inline void tramSetDepartures(TramState& s, JsonArrayConst deps) {
   s.dirty |= DIRTY_NEXT;
 }
 
+inline void tramClearDepartures(TramState& s) {
+  s.depCount = 0;
+  s.depKnown = false;
+  s.dirty |= DIRTY_NEXT;
+}
+
+inline bool isUnavailable(const char* v) {
+  return v && (!strcmp(v, "unavailable") || !strcmp(v, "unknown"));
+}
+
 // Applies one entity's state fields (`st`: compressed object with "s" and/or "a").
-inline void tramApplyEntity(TramState& s, const char* id, JsonObjectConst st) {
+// `full` is true for a complete state ("a" message), false for a change ("c").
+inline void tramApplyEntity(TramState& s, const char* id, JsonObjectConst st, bool full) {
   if (!strcmp(id, TRAM_ENTITY_DEPARTURES)) {
     JsonVariantConst deps = st["a"]["departures"];
-    if (deps.is<JsonArrayConst>()) tramSetDepartures(s, deps.as<JsonArrayConst>());
+    if (isUnavailable(st["s"] | (const char*)nullptr)) tramClearDepartures(s);
+    else if (deps.is<JsonArrayConst>()) tramSetDepartures(s, deps.as<JsonArrayConst>());
+    else if (full) tramClearDepartures(s);  // full state without a list: don't keep a stale one
   } else if (!strcmp(id, TRAM_ENTITY_GAP)) {
     if (!st["s"].is<const char*>()) return;
     const char* v = st["s"];
@@ -110,9 +123,24 @@ inline void tramApplyEntity(TramState& s, const char* id, JsonObjectConst st) {
 // `event` is the "event" object of a subscribe_entities message.
 inline void tramApplyEvent(TramState& s, JsonVariantConst event) {
   for (JsonPairConst kv : event["a"].as<JsonObjectConst>())
-    tramApplyEntity(s, kv.key().c_str(), kv.value().as<JsonObjectConst>());
-  for (JsonPairConst kv : event["c"].as<JsonObjectConst>())
-    tramApplyEntity(s, kv.key().c_str(), kv.value()["+"].as<JsonObjectConst>());
+    tramApplyEntity(s, kv.key().c_str(), kv.value().as<JsonObjectConst>(), true);
+  for (JsonPairConst kv : event["c"].as<JsonObjectConst>()) {
+    const char* id = kv.key().c_str();
+    tramApplyEntity(s, id, kv.value()["+"].as<JsonObjectConst>(), false);
+    // "-": {"a": [names]} lists removed attributes.
+    if (!strcmp(id, TRAM_ENTITY_DEPARTURES))
+      for (JsonVariantConst name : kv.value()["-"]["a"].as<JsonArrayConst>())
+        if (name == "departures") tramClearDepartures(s);
+  }
+}
+
+// Index of the first departure that hasn't left yet (still "now" up to 60 s
+// after its time), or -1. With no clock (now == 0), the list is shown as is.
+inline int tramFirstUpcoming(const TramState& s, uint32_t now) {
+  if (!now) return s.depCount ? 0 : -1;
+  for (int i = 0; i < s.depCount; i++)
+    if (s.dep[i].epoch + 60 > now) return i;
+  return -1;
 }
 
 inline bool histPoint(JsonObjectConst p, GapPoint& out) {

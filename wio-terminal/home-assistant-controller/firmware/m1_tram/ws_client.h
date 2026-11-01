@@ -1,8 +1,12 @@
 // Minimal WebSocket client (RFC 6455) over rpcWiFi's WiFiClient.
 // ArduinoWebsockets has no SAMD51 network backend, so this replaces it.
 // Plain ws:// only, text messages up to WS_MSG_MAX bytes (larger ones are
-// dropped and counted), ping -> pong, close. connect() blocks up to its
-// timeout; poll() reads at most WS_POLL_BUDGET bytes per call.
+// dropped and counted), ping -> pong, close. poll() reads at most
+// WS_POLL_BUDGET bytes per call. connect(): timeoutMs only bounds the HTTP
+// upgrade reply. The TCP connect itself can block for minutes when nothing
+// answers at the host's IP (checked 2026-11-01: >5.5 min, with or without
+// rpcWiFi's timeout argument, whose timeval handling is also broken: it puts
+// the whole timeout into tv_usec).
 #pragma once
 #include <rpcWiFi.h>
 #include "ws_frame.h"

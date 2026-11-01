@@ -80,19 +80,20 @@ static void drawHeader(TFT_eSPI& tft, uint32_t now, HaStatus st, bool full) {
 }
 
 static void drawNext(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
+  int first = tramFirstUpcoming(s, now);  // skip trams that already left
   char cd[16] = "";
-  if (s.depCount) formatCountdown(now, s.dep[0].epoch, cd, sizeof(cd));
+  if (first >= 0) formatCountdown(now, s.dep[first].epoch, cd, sizeof(cd));
   if (!full && !(s.dirty & DIRTY_NEXT) && !strcmp(cd, tv.countdown)) return;
   strcpy(tv.countdown, cd);
   tft.fillRect(0, Y_NEXT, 320, H_NEXT, C_BG);
   tft.setTextDatum(MC_DATUM);
-  if (!s.depKnown || !s.depCount) {
+  if (!s.depKnown || first < 0) {
     tft.setFreeFont(&FreeSans12pt7b);
     tft.setTextColor(C_DIM);
     tft.drawString(s.depKnown ? "No trams scheduled" : "Waiting for data...", 160, Y_NEXT + H_NEXT / 2);
     return;
   }
-  const Departure& d = s.dep[0];
+  const Departure& d = s.dep[first];
   // Row 1: line badge in the line's own color, big countdown on the right
   // (orange when late, with the delay just left of it).
   tft.fillRoundRect(6, Y_NEXT + 6, 46, 30, 4, d.color565);
@@ -119,10 +120,11 @@ static void drawNext(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
   fitText(tft, dir, 308);
   tft.drawString(dir, 6, Y_NEXT + 54);
   // Row 3: following departures.
-  if (s.depCount > 1) {
+  int more = s.depCount - first - 1;
+  if (more > 0) {
     char then[40];
-    if (s.depCount > 2) snprintf(then, sizeof(then), "then %s, %s", s.dep[1].time, s.dep[2].time);
-    else snprintf(then, sizeof(then), "then %s", s.dep[1].time);
+    if (more > 1) snprintf(then, sizeof(then), "then %s, %s", s.dep[first + 1].time, s.dep[first + 2].time);
+    else snprintf(then, sizeof(then), "then %s", s.dep[first + 1].time);
     tft.setTextColor(C_DIM);
     tft.drawString(then, 6, Y_NEXT + 71);
   }

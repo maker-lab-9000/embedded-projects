@@ -53,15 +53,8 @@ inline void haSendHistory() {
 }
 
 inline void haHandle() {
-  // Keep only what the model reads; the departures sensor carries many other attributes.
   static JsonDocument filter;
-  if (filter.isNull()) {
-    filter["type"] = true; filter["id"] = true; filter["success"] = true; filter["result"] = true;
-    JsonObject ent = filter["event"]["a"]["*"].to<JsonObject>();
-    ent["s"] = true; ent["a"]["departures"] = true;
-    JsonObject chg = filter["event"]["c"]["*"]["+"].to<JsonObject>();
-    chg["s"] = true; chg["a"]["departures"] = true;
-  }
+  if (filter.isNull()) haBuildFilter(filter);
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, haWs.msg(), haWs.msgLen(), DeserializationOption::Filter(filter));
   if (err) { Serial.print("ha: json "); Serial.println(err.c_str()); return; }

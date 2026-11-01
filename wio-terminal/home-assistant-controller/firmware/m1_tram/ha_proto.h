@@ -26,6 +26,18 @@ struct Backoff {
   void reset() { cur = 5000; }
 };
 
+// ArduinoJson filter for incoming messages: keeps only what the model reads
+// (the departures sensor carries many other attributes).
+inline void haBuildFilter(JsonDocument& f) {
+  f["type"] = true; f["id"] = true; f["success"] = true; f["result"] = true;
+  JsonObject ent = f["event"]["a"]["*"].to<JsonObject>();
+  ent["s"] = true; ent["a"]["departures"] = true; ent["lc"] = true; ent["lu"] = true;
+  JsonObject chg = f["event"]["c"]["*"].to<JsonObject>();
+  JsonObject plus = chg["+"].to<JsonObject>();
+  plus["s"] = true; plus["a"]["departures"] = true; plus["lc"] = true; plus["lu"] = true;
+  chg["-"] = true;
+}
+
 inline HaAction haHandleMessage(HaProto& p, TramState& s, JsonVariantConst msg) {
   const char* type = msg["type"] | "";
   uint32_t id = msg["id"] | 0u;

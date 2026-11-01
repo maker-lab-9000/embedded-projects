@@ -381,6 +381,52 @@ static void test_gap_append_full_drops_oldest() {
   CHECK(s.histCount == TRAM_MAX_HIST && s.hist[0].v == 1.0f && s.hist[TRAM_MAX_HIST - 1].v == 7.0f);
 }
 
+// Review fix 1: messages go through the same ArduinoJson filter the firmware uses.
+static void applyFiltered(HaProto& p, TramState& s, const char* json) {
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
+  haHandleMessage(p, s, d.as<JsonVariantConst>());
+}
+
+static void test_filter_keeps_gap_timestamp() {
+  HaProto p; TramState s{};
+  p.histPending = 2;
+  applyFiltered(p, s, R"({"id":2,"type":"result","success":true,"result":{"input_number.home_m1_tram_minutes_between_trams":[{"s":"20","lu":1793500000}]}})");
+  applyFiltered(p, s, R"({"id":1,"type":"event","event":{"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"21.0","lc":1793570000.1,"c":"ctx"}}}}})");
+  CHECK(s.histCount == 2 && s.hist[1].v == 21.0f);
+}
+
+static void test_filter_keeps_departures_and_removals() {
+  HaProto p; TramState s{};
+  applyFiltered(p, s, R"({"id":1,"type":"event","event":{"a":{"sensor.kuckhoffstr_berlin":{"s":"x","a":{"icon":"mdi:clock","departures":[
+    {"line_name":"M1","time":"23:18","timestamp":"2026-11-01T23:18:00+01:00","direction":"Mitte","color":"#D82020","delay":0,"cancelled":false}]}}}}})");
+  CHECK(s.depCount == 1);
+  applyFiltered(p, s, R"({"id":1,"type":"event","event":{"c":{"sensor.kuckhoffstr_berlin":{"-":{"a":["departures"]}}}}})");
+  CHECK(s.depCount == 0 && !s.depKnown);
+}
+
+// Review fix 3: no stale "now" forever.
+static void test_departures_cleared_when_unavailable() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  applyJson(s, R"({"c":{"sensor.kuckhoffstr_berlin":{"+":{"s":"unavailable","a":{"friendly_name":"x"}}}}})");
+  CHECK(s.depCount == 0 && !s.depKnown);
+  applyJson(s, INITIAL);
+  applyJson(s, R"({"a":{"sensor.kuckhoffstr_berlin":{"s":"unavailable","a":{"friendly_name":"x"}}}})");
+  CHECK(s.depCount == 0 && !s.depKnown);
+}
+
+static void test_first_upcoming_skips_past() {
+  TramState s{};
+  applyJson(s, INITIAL);  // 22:58, 23:18, 23:38 local = 21:58Z, 22:18Z, 22:38Z
+  CHECK(tramFirstUpcoming(s, 1793570280u - 300) == 0);
+  CHECK(tramFirstUpcoming(s, 1793570280u + 30) == 0);   // within the "now" minute
+  CHECK(tramFirstUpcoming(s, 1793570280u + 120) == 1);  // 22:58 has left
+  CHECK(tramFirstUpcoming(s, 1793570280u + 3600) == -1);
+  CHECK(tramFirstUpcoming(s, 0) == 0);                  // no clock: show the list as is
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -417,6 +463,10 @@ int main() {
   test_sleep_other_keys_wake_only();
   test_gap_change_appends_chart_point();
   test_gap_append_full_drops_oldest();
+  test_filter_keeps_gap_timestamp();
+  test_filter_keeps_departures_and_removals();
+  test_departures_cleared_when_unavailable();
+  test_first_upcoming_skips_past();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }
