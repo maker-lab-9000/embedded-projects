@@ -1,4 +1,5 @@
-// Tram page: next M1 from Kuckhoffstr., minutes-between-trams chart, last departure.
+// Tram page: two matching rows (next M1 from Kuckhoffstr., last M1 departed),
+// then the minutes-between-trams chart at the bottom.
 // Redraws a region only when its data changed (TramState.dirty) or, for the
 // once-a-second texts (clock, countdown, "ago"), when the text changed.
 #pragma once
@@ -6,6 +7,7 @@
 #include "tram_model.h"
 #include "chart.h"
 #include "ha.h"
+#include "battery.h"
 
 // Colors (RGB565), dark theme close to Home Assistant's.
 #define C_BG     0x1082  // #121212
@@ -22,16 +24,15 @@
 // Layout (320x240, rotation 3).
 #define Y_HEAD   0
 #define H_HEAD   24
-#define Y_NEXT   25
-#define H_NEXT   74
-#define Y_CHART  101
-#define H_CHART  108
-#define Y_LAST   211
-#define H_LAST   29
+#define H_ROW    30
+#define Y_NEXT   26
+#define Y_LAST   (Y_NEXT + H_ROW + 1)
+#define Y_CHART  (Y_LAST + H_ROW + 3)
+#define H_CHART  (240 - Y_CHART)
 #define PLOT_X   30
 #define PLOT_W   282
-#define PLOT_Y   128
-#define PLOT_H   60
+#define PLOT_Y   (Y_CHART + 30)
+#define PLOT_H   (240 - PLOT_Y - 18)
 
 struct TramView {
   char clock[8] = "";
@@ -42,26 +43,17 @@ struct TramView {
 };
 static TramView tv;
 
-// Shortens `s` with ".." until it fits `maxW` pixels in the current font.
-static void fitText(TFT_eSPI& tft, char* s, int maxW) {
-  size_t n = strlen(s);
-  if (tft.textWidth(s) <= maxW) return;
-  while (n > 2) {
-    s[--n] = 0;
-    s[n - 1] = '.'; s[n - 2] = '.';
-    if (tft.textWidth(s) <= maxW) return;
-  }
-}
-
 static void drawHeader(TFT_eSPI& tft, uint32_t now, HaStatus st, bool full) {
   char clk[8];
   formatClock(now, clk, sizeof(clk));
-  if (!full && st == tv.status && !strcmp(clk, tv.clock)) return;
+  bool bat = batteryPoll();
+  if (!full && !bat && st == tv.status && !strcmp(clk, tv.clock)) return;
   tft.fillRect(0, Y_HEAD, 320, H_HEAD, C_BG);
   tft.setFreeFont(&FreeSansBold9pt7b);
   tft.setTextColor(C_TEXT);
   tft.setTextDatum(L_BASELINE);
-  tft.drawString("Kuckhoffstr.", 6, 17);
+  batteryDraw(tft, 6, 6, C_BG, C_TEXT);  // top-left corner
+  tft.drawString("M1 Tram", batteryOk() ? 38 : 6, 17);
   uint16_t dot = st == HA_CONNECTED ? C_GREEN : st == HA_CONNECTING ? C_YELLOW : C_RED;
   const char* note = st == HA_CONNECTING ? "Connecting" : st == HA_OFFLINE ? (netUp() ? "Offline" : "No WiFi")
                    : st == HA_AUTH_REJECTED ? "Token rejected" : "";
@@ -79,55 +71,54 @@ static void drawHeader(TFT_eSPI& tft, uint32_t now, HaStatus st, bool full) {
   tv.status = st;
 }
 
-static void drawNext(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
-  int first = tramFirstUpcoming(s, now);  // skip trams that already left
-  char cd[16] = "";
-  if (first >= 0) formatCountdown(now, s.dep[first].epoch, cd, sizeof(cd));
-  if (!full && !(s.dirty & DIRTY_NEXT) && !strcmp(cd, tv.countdown)) return;
-  strcpy(tv.countdown, cd);
-  tft.fillRect(0, Y_NEXT, 320, H_NEXT, C_BG);
-  tft.setTextDatum(MC_DATUM);
-  if (!s.depKnown || first < 0) {
-    tft.setFreeFont(&FreeSans12pt7b);
-    tft.setTextColor(C_DIM);
-    tft.drawString(s.depKnown ? "No trams scheduled" : "Waiting for data...", 160, Y_NEXT + H_NEXT / 2);
-    return;
-  }
-  const Departure& d = s.dep[first];
-  // Row 1: line badge in the line's own color, big countdown on the right
-  // (orange when late, with the delay just left of it).
-  tft.fillRoundRect(6, Y_NEXT + 6, 46, 30, 4, d.color565);
-  tft.setFreeFont(&FreeSansBold12pt7b);
-  tft.setTextColor(C_TEXT);
-  tft.drawString(d.line, 29, Y_NEXT + 21);
-  tft.setFreeFont(&FreeSansBold18pt7b);
-  tft.setTextDatum(R_BASELINE);
-  tft.setTextColor(d.delayMin > 0 ? C_ORANGE : C_TEXT);
-  tft.drawString(cd, 314, Y_NEXT + 34);
-  if (d.delayMin > 0) {
-    char dl[8];
-    snprintf(dl, sizeof(dl), "+%d", d.delayMin);
-    int cdW = tft.textWidth(cd);
-    tft.setFreeFont(&FreeSans9pt7b);
-    tft.drawString(dl, 314 - cdW - 8, Y_NEXT + 34);
-  }
-  // Row 2: direction, full width.
-  char dir[44];
-  snprintf(dir, sizeof(dir), "> %s", d.dir);
+static void drawTramIcon(TFT_eSPI& tft, int x, int y, uint16_t color) {
+  tft.fillRoundRect(x, y, 14, 15, 3, color);
+  tft.fillRect(x + 3, y + 3, 8, 5, C_BG);
+  tft.drawFastHLine(x + 4, y - 3, 6, color);
+  tft.drawLine(x + 2, y + 15, x, y + 18, color);
+  tft.drawLine(x + 11, y + 15, x + 13, y + 18, color);
+}
+
+// One status row: tram icon, label on the left, time on the right.
+static void drawRow(TFT_eSPI& tft, int y, uint16_t icon, const char* label, const char* value, uint16_t valueColor) {
+  tft.fillRect(0, y, 320, H_ROW, C_BG);
+  drawTramIcon(tft, 8, y + 6, icon);
   tft.setFreeFont(&FreeSans9pt7b);
   tft.setTextColor(C_TEXT);
   tft.setTextDatum(L_BASELINE);
-  fitText(tft, dir, 308);
-  tft.drawString(dir, 6, Y_NEXT + 54);
-  // Row 3: following departures.
-  int more = s.depCount - first - 1;
-  if (more > 0) {
-    char then[40];
-    if (more > 1) snprintf(then, sizeof(then), "then %s, %s", s.dep[first + 1].time, s.dep[first + 2].time);
-    else snprintf(then, sizeof(then), "then %s", s.dep[first + 1].time);
-    tft.setTextColor(C_DIM);
-    tft.drawString(then, 6, Y_NEXT + 71);
+  tft.drawString(label, 32, y + 21);
+  tft.setTextColor(valueColor);
+  tft.setTextDatum(R_BASELINE);
+  tft.drawString(value, 314, y + 21);
+}
+
+// Next tram: "in 4 min", orange with the delay when late ("in 6 min +2").
+static void drawNext(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
+  int first = tramFirstUpcoming(s, now);  // skip trams that already left
+  char val[24];
+  uint16_t col = C_TEXT;
+  if (!s.depKnown) { strcpy(val, "--"); col = C_DIM; }
+  else if (first < 0) { strcpy(val, "No trams"); col = C_DIM; }
+  else {
+    const Departure& d = s.dep[first];
+    formatCountdown(now, d.epoch, val, sizeof(val));
+    if (d.delayMin > 0) {
+      size_t n = strlen(val);
+      snprintf(val + n, sizeof(val) - n, " +%d", d.delayMin);
+      col = C_ORANGE;
+    }
   }
+  if (!full && !(s.dirty & DIRTY_NEXT) && !strcmp(val, tv.countdown)) return;
+  strcpy(tv.countdown, val);
+  drawRow(tft, Y_NEXT, C_GREEN, "Kuckhoffstr.", val, col);
+}
+
+static void drawLast(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
+  char ago[20];
+  formatAgo(now, s.lastDeparted, ago, sizeof(ago));
+  if (!full && !(s.dirty & DIRTY_LAST) && !strcmp(ago, tv.ago)) return;
+  strcpy(tv.ago, ago);
+  drawRow(tft, Y_LAST, C_RED, "Last M1 departed", ago, C_TEXT);
 }
 
 static void drawChart(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
@@ -186,36 +177,12 @@ static void drawChart(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
   }
 }
 
-static void drawTramIcon(TFT_eSPI& tft, int x, int y) {
-  tft.fillRoundRect(x, y, 14, 15, 3, C_RED);
-  tft.fillRect(x + 3, y + 3, 8, 5, C_BG);
-  tft.drawFastHLine(x + 4, y - 3, 6, C_RED);
-  tft.drawLine(x + 2, y + 15, x, y + 18, C_RED);
-  tft.drawLine(x + 11, y + 15, x + 13, y + 18, C_RED);
-}
-
-static void drawLast(TFT_eSPI& tft, TramState& s, uint32_t now, bool full) {
-  char ago[20];
-  formatAgo(now, s.lastDeparted, ago, sizeof(ago));
-  if (!full && !(s.dirty & DIRTY_LAST) && !strcmp(ago, tv.ago)) return;
-  tft.fillRect(0, Y_LAST, 320, H_LAST, C_BG);
-  if (full) tft.drawFastHLine(0, Y_LAST - 2, 320, C_RULE);
-  drawTramIcon(tft, 8, Y_LAST + 5);
-  tft.setFreeFont(&FreeSans9pt7b);
-  tft.setTextColor(C_TEXT);
-  tft.setTextDatum(L_BASELINE);
-  tft.drawString("Last M1 departed", 32, Y_LAST + 20);
-  tft.setTextDatum(R_BASELINE);
-  tft.drawString(ago, 314, Y_LAST + 20);
-  strcpy(tv.ago, ago);
-}
-
 // Draws the page; `full` repaints everything (page switch, wake from sleep).
 static void tramDraw(TFT_eSPI& tft, TramState& s, uint32_t now, HaStatus st, bool full) {
   if (full) tft.fillScreen(C_BG);
   drawHeader(tft, now, st, full);
   drawNext(tft, s, now, full);
-  drawChart(tft, s, now, full);
   drawLast(tft, s, now, full);
+  drawChart(tft, s, now, full);
   s.dirty = 0;
 }

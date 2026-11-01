@@ -427,6 +427,25 @@ static void test_first_upcoming_skips_past() {
   CHECK(tramFirstUpcoming(s, 0) == 0);                  // no clock: show the list as is
 }
 
+#include "battery_meter.h"
+
+static void test_battery_fill() {
+  CHECK(batteryFillPx(100, 18) == 18);
+  CHECK(batteryFillPx(50, 18) == 9);
+  CHECK(batteryFillPx(0, 18) == 0);
+  CHECK(batteryFillPx(3, 18) == 1);    // anything above 0 shows at least a sliver
+  CHECK(batteryFillPx(140, 18) == 18); // gauge glitches clamp
+  CHECK(batteryFillPx(-5, 18) == 0);
+}
+
+static void test_battery_color() {
+  CHECK(batteryColor(80) == 0x07E0);  // green
+  CHECK(batteryColor(30) == 0x07E0);
+  CHECK(batteryColor(29) == 0xFFE0);  // yellow
+  CHECK(batteryColor(15) == 0xFFE0);
+  CHECK(batteryColor(14) == 0xF800);  // red
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -467,6 +486,8 @@ int main() {
   test_filter_keeps_departures_and_removals();
   test_departures_cleared_when_unavailable();
   test_first_upcoming_skips_past();
+  test_battery_fill();
+  test_battery_color();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

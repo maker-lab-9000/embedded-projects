@@ -17,5 +17,10 @@
   (and optionally a key handler), add its entities to the HA subscription,
   and add a row to `PAGES[]` in `m1_tram.ino`. Joystick left/right switching
   is already in `ui.h` and turns on once there are two pages.
+- **Serial port is not a neutral observer.** Reopening the port in a loop
+  makes rpcWiFi calls hang (the watchdog then resets the board). For
+  stability tests, upload, then watch `/dev/cu.usbmodem*` disappearing
+  (= resets) without opening it.
+- **Don't drive `LCD_BACKLIGHT` with digitalWrite**; use `backlightSet()`.
 - **Check the layout without the device in hand:** send `s` over serial and
   convert the RGB565 dump (big-endian) to PNG.

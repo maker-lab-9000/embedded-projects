@@ -6,6 +6,7 @@
 #include "ws_client.h"
 #include "ha_proto.h"
 #include "net.h"
+#include "wdt.h"
 
 #define HA_HIST_EVERY_MS  600000UL
 #define HA_PING_EVERY_MS  30000UL
@@ -89,19 +90,30 @@ inline void haPoll() {
     haSt = HA_CONNECTING;
     haConnStart = ms;
     Serial.println("ha: connecting");
-    if (!haWs.connect(HA_HOST, HA_PORT, "/api/websocket")) { haDrop("connect failed"); return; }
+    wdtFeed();  // the connect can hang when HA is down; the watchdog then resets the board
+    wdtCrumb(20);
+    bool ok = haWs.connect(HA_HOST, HA_PORT, "/api/websocket");
+    wdtCrumb(21);
+    wdtFeed();
+    if (!ok) { haDrop("connect failed"); return; }
     return;
   }
+  wdtCrumb(22);
   if (!haWs.connected()) { haDrop("socket closed"); return; }
+  wdtCrumb(23);
   for (int i = 0; i < 4 && haWs.poll(); i++) {  // a few messages per loop at most
+    wdtCrumb(24);
     haHandle();
+    wdtCrumb(25);
     if (haSt == HA_AUTH_REJECTED) return;
   }
   if (haSt == HA_CONNECTING) {
     if (ms - haConnStart > HA_AUTH_TIMEOUT_MS) haDrop("auth timeout");
     return;
   }
+  wdtCrumb(26);
   if (!haP.histPending && (int32_t)(ms - haHistDue) >= 0) haSendHistory();
+  wdtCrumb(27);
   if (haP.pingPending) {
     if (ms - haPingSent > HA_PING_TIMEOUT_MS) haDrop("ping timeout");
   } else if ((int32_t)(ms - haPingDue) >= 0) {

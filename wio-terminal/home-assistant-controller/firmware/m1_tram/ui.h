@@ -3,6 +3,7 @@
 #pragma once
 #include <TFT_eSPI.h>
 #include "sleep_ctl.h"
+#include "backlight.h"
 
 struct Page {
   const char* name;
@@ -26,16 +27,15 @@ inline void uiInit(const Page* pages, uint8_t count) {
   uiPages = pages;
   uiPageCount = count;
   for (uint8_t i = 0; i < KEY_COUNT; i++) pinMode(KEY_PINS[i], INPUT_PULLUP);
-  pinMode(LCD_BACKLIGHT, OUTPUT);
-  digitalWrite(LCD_BACKLIGHT, HIGH);
+  backlightInit(BACKLIGHT_DEFAULT);
 }
 
 inline bool uiDark() { return uiSleep.dark; }
 
 static void uiKey(Key k) {
   switch (sleepOnKey(uiSleep, k)) {
-    case SLEEP_TURN_OFF: digitalWrite(LCD_BACKLIGHT, LOW); return;
-    case SLEEP_TURN_ON: digitalWrite(LCD_BACKLIGHT, HIGH); uiNeedFull = true; return;
+    case SLEEP_TURN_OFF: backlightSet(0); return;
+    case SLEEP_TURN_ON: backlightSet(BACKLIGHT_DEFAULT); uiNeedFull = true; return;
     case SLEEP_PASS: break;
   }
   if (uiPageCount > 1 && (k == KEY_JOY_LEFT || k == KEY_JOY_RIGHT)) {

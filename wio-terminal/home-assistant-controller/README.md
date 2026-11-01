@@ -1,8 +1,10 @@
 # Wio Terminal Home Assistant controller
 
 A Seeed Wio Terminal that shows Home Assistant dashboards. Version 1 has one
-page, **Tram**: the next M1 from Kuckhoffstr. with a live countdown, a 24 h
-chart of the minutes between trams, and when the last M1 left.
+page, **Tram**: when the next M1 leaves Kuckhoffstr. (green tram), when the
+last one left (red tram), and a 24 h chart of the minutes between trams.
+A battery meter sits in the top-left corner when the battery chassis is
+attached. Backlight runs at 35 %.
 
 ![Tram page](docs/images/tram-page.png)
 
@@ -11,7 +13,7 @@ Plugs, Status. Graphs are deferred.
 
 ## Buttons
 
-- **C** (leftmost top button): display off / on. The connection stays up while dark.
+- **C** (leftmost top button): display off / on (35 % brightness). The connection stays up while dark.
 - **A**, **B**, joystick: wake the display when it is off.
 
 ## Setup
@@ -20,7 +22,7 @@ Plugs, Status. Graphs are deferred.
    and fill in WiFi and a Home Assistant long-lived access token
    (Profile → Security). `secrets.h` and `.env` are gitignored.
 2. Libraries (Arduino library folder): `ArduinoJson` 7.x, `Seeed Arduino rpcWiFi`,
-   `Seeed Arduino rpcUnified`. The display uses the Seeed SAMD core's bundled `TFT_eSPI`.
+   `Seeed Arduino rpcUnified`, `SparkFun BQ27441 LiPo Fuel Gauge`. The display uses the Seeed SAMD core's bundled `TFT_eSPI`.
 3. The RTL8720 WiFi chip needs Seeed's eRPC firmware (tested with 2.1.3).
 
 ```sh
@@ -47,10 +49,24 @@ test/run.sh
   support (a plain `WiFi.begin()` hangs there), so the firmware scans and
   joins the strongest WPA/WPA2 AP by BSSID (`wifi_pick.h`).
 
+## Watchdog
+
+If the main loop stalls for 8 s, the watchdog's early-warning interrupt holds
+the RTL8720 WiFi chip in reset, and at 16 s the board resets. This catches the
+rpcWiFi connect that hangs for minutes when the HA host is down. The WiFi chip
+needs the long reset: after a short one its scans came back empty and hung.
+The last step reached before a reset is kept in backup RAM and printed at boot.
+
 ## Serial commands (115200 baud)
 
 - `r`: drop and reconnect the Home Assistant session (tests recovery).
 - `s`: dump a screenshot: `SHOT\n` followed by 320×240 RGB565 pixels, big-endian.
+- `c`: uptime, HA status, watchdog early-warning count.
+- `w`: hang on purpose to test the watchdog.
+
+Opening and closing the serial port repeatedly while the board is running can
+make an rpcWiFi call hang (then the watchdog resets it). Keep one monitor open,
+or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 
 ## Files
 
@@ -64,7 +80,10 @@ test/run.sh
 | `tram_model.h` | HA messages → tram state (pure) |
 | `timeutil.h` | ISO time parsing, Berlin time, "in 4 min" / "3 min ago" (pure) |
 | `page_tram.h`, `chart.h` | drawing, chart geometry (pure) |
-| `ui.h`, `sleep_ctl.h` | buttons, backlight, page switching |
+| `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
+| `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
+| `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |
+| `wdt.h` | watchdog, WiFi chip reset on early warning, breadcrumbs |
 
 Design: `docs/superpowers/specs/2026-11-01-tram-page-design.md`.
 Plan: `docs/superpowers/plans/2026-11-01-tram-page.md`.

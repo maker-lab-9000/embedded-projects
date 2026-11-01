@@ -5,6 +5,7 @@
 #include "ha.h"
 #include "page_tram.h"
 #include "ui.h"
+#include "wdt.h"
 
 static TFT_eSPI tft;
 static TramState tram{};
@@ -25,9 +26,13 @@ void setup() {
   uint32_t t0 = millis();
   while (!Serial && millis() - t0 < 1500) {}
   Serial.println("\n== m1_tram ==");
+  if (wdtCausedLastReset()) Serial.println("reset by watchdog");
+  wdtReport();
+  wdtInit();
   tft.begin();
   tft.setRotation(3);
   tft.fillScreen(C_BG);
+  batteryInit();
   uiInit(PAGES, sizeof(PAGES) / sizeof(PAGES[0]));
   uiPoll();  // first paint before the (blocking) WiFi scan
   netInit();
@@ -46,12 +51,23 @@ static void screenshot() {
 }
 
 void loop() {
+  wdtFeed();
+  wdtCrumb(1);
   netPoll();
+  wdtCrumb(4);
   haPoll();
+  wdtCrumb(5);
   uiPoll();
+  wdtCrumb(6);
   if (Serial.available()) {
     int c = Serial.read();
     if (c == 'r') haForceReconnect();   // test reconnects
     if (c == 's') screenshot();
+    if (c == 'c') {                     // uptime and watchdog breadcrumbs
+      Serial.print("uptime s "); Serial.print(millis() / 1000);
+      Serial.print(" ha "); Serial.print(haStatus());
+      Serial.print(" early warnings "); Serial.println(WDT_CRUMBS[2]);
+    }
+    if (c == 'w') { Serial.println("hanging to test the watchdog"); while (true) {} }
   }
 }
