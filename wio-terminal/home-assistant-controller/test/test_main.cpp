@@ -226,6 +226,94 @@ static void test_hex_to_565() {
   CHECK(hexTo565(nullptr) == 0xF800);
 }
 
+#include "ha_proto.h"
+
+static HaAction handle(HaProto& p, TramState& s, const char* json) {
+  JsonDocument d;
+  CHECK(deserializeJson(d, json) == DeserializationError::Ok);
+  return haHandleMessage(p, s, d.as<JsonVariantConst>());
+}
+
+static void test_auth_flow() {
+  HaProto p; TramState s{};
+  CHECK(handle(p, s, R"({"type":"auth_required","ha_version":"2026.10.4"})") == HA_ACT_SEND_AUTH);
+  CHECK(!p.authed);
+  CHECK(handle(p, s, R"({"type":"auth_ok","ha_version":"2026.10.4"})") == HA_ACT_SUBSCRIBE);
+  CHECK(p.authed);
+}
+
+static void test_auth_invalid_rejects() {
+  HaProto p; TramState s{};
+  CHECK(handle(p, s, R"({"type":"auth_invalid","message":"Invalid access token or password"})") == HA_ACT_REJECTED);
+  CHECK(!p.authed);
+}
+
+static void test_event_routing() {
+  HaProto p; TramState s{};
+  handle(p, s, R"({"type":"auth_ok"})");
+  CHECK(handle(p, s, R"({"id":7,"type":"event","event":{"a":{"input_number.home_m1_tram_minutes_between_trams":{"s":"20.0"}}}})") == HA_ACT_NONE);
+  CHECK(!s.gapKnown);  // not our subscription id
+  CHECK(handle(p, s, R"({"id":1,"type":"event","event":{"a":{"input_number.home_m1_tram_minutes_between_trams":{"s":"20.0"}}}})") == HA_ACT_NONE);
+  CHECK(s.gapKnown && s.gapMin == 20.0f);
+}
+
+static void test_history_result_routing() {
+  HaProto p; TramState s{};
+  p.histPending = 5;
+  handle(p, s, R"({"id":4,"type":"result","success":true,"result":{"input_number.home_m1_tram_minutes_between_trams":[{"s":"20","lu":1793500000}]}})");
+  CHECK(!s.histKnown);  // stale reply ignored
+  handle(p, s, R"({"id":5,"type":"result","success":true,"result":{"input_number.home_m1_tram_minutes_between_trams":[{"s":"20","lu":1793500000}]}})");
+  CHECK(s.histKnown && s.histCount == 1 && p.histPending == 0);
+  p.histPending = 6;
+  handle(p, s, R"({"id":6,"type":"result","success":false,"error":{"code":"x"}})");
+  CHECK(p.histPending == 0 && s.histCount == 1);  // failure keeps old chart
+}
+
+static void test_pong_tracking() {
+  HaProto p; TramState s{};
+  p.pingPending = 9;
+  handle(p, s, R"({"id":9,"type":"pong"})");
+  CHECK(p.pingPending == 0);
+}
+
+static void test_backoff() {
+  Backoff b;
+  CHECK(b.next() == 5000u);
+  CHECK(b.next() == 10000u);
+  CHECK(b.next() == 20000u);
+  for (int i = 0; i < 10; i++) b.next();
+  CHECK(b.next() == 300000u);
+  b.reset();
+  CHECK(b.next() == 5000u);
+}
+
+static void test_format_iso_utc() {
+  char b[24];
+  formatIsoUtc(1793568900u, b, sizeof(b));
+  CHECK_STR(b, "2026-11-01T21:35:00Z");
+  formatIsoUtc(1774745940u, b, sizeof(b));
+  CHECK_STR(b, "2026-03-29T00:59:00Z");
+}
+
+#include "wifi_pick.h"
+
+static void test_pick_skips_unknown_security() {
+  // Real scan 2026-11-01: same SSID on 5 GHz (unknown security, stronger) and 2.4 GHz WPA2.
+  const BssInfo l[] = {{-47, 36, 6, true}, {-55, 11, 3, true}, {-60, 100, 3, false}};
+  CHECK(pickBss(l, 3) == 1);
+}
+
+static void test_pick_strongest_supported() {
+  const BssInfo l[] = {{-70, 1, 3, true}, {-50, 6, 4, true}, {-40, 11, 3, false}, {-45, 36, 2, true}};
+  CHECK(pickBss(l, 4) == 3);
+}
+
+static void test_pick_none() {
+  const BssInfo l[] = {{-47, 36, 6, true}, {-55, 11, 3, false}};
+  CHECK(pickBss(l, 2) == -1);
+  CHECK(pickBss(l, 0) == -1);
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -246,6 +334,16 @@ int main() {
   test_history_skips_non_numeric();
   test_history_keeps_latest_96();
   test_hex_to_565();
+  test_auth_flow();
+  test_auth_invalid_rejects();
+  test_event_routing();
+  test_history_result_routing();
+  test_pong_tracking();
+  test_backoff();
+  test_format_iso_utc();
+  test_pick_skips_unknown_security();
+  test_pick_strongest_supported();
+  test_pick_none();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

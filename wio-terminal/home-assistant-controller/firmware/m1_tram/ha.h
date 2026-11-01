@@ -1,0 +1,121 @@
+// Home Assistant websocket session: connect, auth, subscribe, history refresh,
+// keepalive ping, reconnect with backoff. A rejected token stops all retries
+// until reset (HA bans IPs after repeated failed logins).
+#pragma once
+#include "secrets.h"
+#include "ws_client.h"
+#include "ha_proto.h"
+#include "net.h"
+
+#define HA_HIST_EVERY_MS  600000UL
+#define HA_PING_EVERY_MS  30000UL
+#define HA_PING_TIMEOUT_MS 10000UL
+#define HA_AUTH_TIMEOUT_MS 10000UL
+
+enum HaStatus : uint8_t { HA_OFFLINE, HA_CONNECTING, HA_CONNECTED, HA_AUTH_REJECTED };
+
+static WsClient haWs;
+static HaProto haP;
+static Backoff haBackoff;
+static TramState* haState = nullptr;
+static HaStatus haSt = HA_OFFLINE;
+static uint32_t haNextTry = 0, haConnStart = 0, haHistDue = 0, haPingDue = 0, haPingSent = 0;
+static uint32_t haNextId = 2;
+
+inline HaStatus haStatus() { return haSt; }
+inline void haInit(TramState* s) { haState = s; }
+
+inline void haDrop(const char* why) {
+  haWs.close();
+  haSt = HA_OFFLINE;
+  haP = HaProto();
+  uint32_t d = haBackoff.next();
+  haNextTry = millis() + d;
+  Serial.print("ha: offline ("); Serial.print(why); Serial.print("), retry in s ");
+  Serial.println(d / 1000);
+}
+
+// Serial command 'r' in the sketch calls this to test reconnects.
+inline void haForceReconnect() { if (haSt == HA_CONNECTED || haSt == HA_CONNECTING) haDrop("forced"); }
+
+inline void haSendHistory() {
+  uint32_t now = nowUtc();
+  if (!now) return;  // need a clock for start_time; retried on the next poll
+  char start[24], req[256];
+  formatIsoUtc(now - 86400, start, sizeof(start));
+  uint32_t id = haNextId++;
+  snprintf(req, sizeof(req),
+           "{\"id\":%lu,\"type\":\"history/history_during_period\",\"start_time\":\"%s\","
+           "\"entity_ids\":[\"" TRAM_ENTITY_GAP "\"],\"minimal_response\":true,\"no_attributes\":true}",
+           (unsigned long)id, start);
+  if (haWs.sendText(req)) haP.histPending = id;
+  haHistDue = millis() + HA_HIST_EVERY_MS;
+}
+
+inline void haHandle() {
+  // Keep only what the model reads; the departures sensor carries many other attributes.
+  static JsonDocument filter;
+  if (filter.isNull()) {
+    filter["type"] = true; filter["id"] = true; filter["success"] = true; filter["result"] = true;
+    JsonObject ent = filter["event"]["a"]["*"].to<JsonObject>();
+    ent["s"] = true; ent["a"]["departures"] = true;
+    JsonObject chg = filter["event"]["c"]["*"]["+"].to<JsonObject>();
+    chg["s"] = true; chg["a"]["departures"] = true;
+  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, haWs.msg(), haWs.msgLen(), DeserializationOption::Filter(filter));
+  if (err) { Serial.print("ha: json "); Serial.println(err.c_str()); return; }
+  switch (haHandleMessage(haP, *haState, doc.as<JsonVariantConst>())) {
+    case HA_ACT_SEND_AUTH:
+      haWs.sendText("{\"type\":\"auth\",\"access_token\":\"" HA_TOKEN "\"}");
+      break;
+    case HA_ACT_SUBSCRIBE:
+      haWs.sendText("{\"id\":1,\"type\":\"subscribe_entities\",\"entity_ids\":[\""
+                    TRAM_ENTITY_DEPARTURES "\",\"" TRAM_ENTITY_GAP "\",\"" TRAM_ENTITY_LAST "\"]}");
+      haSt = HA_CONNECTED;
+      haBackoff.reset();
+      haHistDue = millis();
+      haPingDue = millis() + HA_PING_EVERY_MS;
+      Serial.println("ha: connected");
+      break;
+    case HA_ACT_REJECTED:
+      haWs.close();
+      haSt = HA_AUTH_REJECTED;
+      Serial.println("ha: TOKEN REJECTED - not retrying until reset");
+      break;
+    case HA_ACT_NONE:
+      break;
+  }
+}
+
+inline void haPoll() {
+  if (!haState || haSt == HA_AUTH_REJECTED) return;
+  uint32_t ms = millis();
+  if (haSt == HA_OFFLINE) {
+    if (!netUp() || (int32_t)(ms - haNextTry) < 0) return;
+    haSt = HA_CONNECTING;
+    haConnStart = ms;
+    Serial.println("ha: connecting");
+    if (!haWs.connect(HA_HOST, HA_PORT, "/api/websocket")) { haDrop("connect failed"); return; }
+    return;
+  }
+  if (!haWs.connected()) { haDrop("socket closed"); return; }
+  for (int i = 0; i < 4 && haWs.poll(); i++) {  // a few messages per loop at most
+    haHandle();
+    if (haSt == HA_AUTH_REJECTED) return;
+  }
+  if (haSt == HA_CONNECTING) {
+    if (ms - haConnStart > HA_AUTH_TIMEOUT_MS) haDrop("auth timeout");
+    return;
+  }
+  if (!haP.histPending && (int32_t)(ms - haHistDue) >= 0) haSendHistory();
+  if (haP.pingPending) {
+    if (ms - haPingSent > HA_PING_TIMEOUT_MS) haDrop("ping timeout");
+  } else if ((int32_t)(ms - haPingDue) >= 0) {
+    char req[40];
+    uint32_t id = haNextId++;
+    snprintf(req, sizeof(req), "{\"id\":%lu,\"type\":\"ping\"}", (unsigned long)id);
+    if (haWs.sendText(req)) { haP.pingPending = id; haPingSent = ms; }
+    haPingDue = ms + HA_PING_EVERY_MS;
+  }
+}
