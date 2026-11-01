@@ -88,6 +88,17 @@ inline void tramApplyEntity(TramState& s, const char* id, JsonObjectConst st) {
     s.gapKnown = end != v && *end == 0;
     if (s.gapKnown) s.gapMin = f;
     s.dirty |= DIRTY_GAP;
+    // Live change: extend the chart now instead of waiting for the next history fetch.
+    double t = st["lc"] | (st["lu"] | 0.0);
+    if (s.gapKnown && s.histKnown && t > 0 &&
+        (s.histCount == 0 || (uint32_t)t > s.hist[s.histCount - 1].t)) {
+      if (s.histCount == TRAM_MAX_HIST) {
+        memmove(s.hist, s.hist + 1, sizeof(GapPoint) * (TRAM_MAX_HIST - 1));
+        s.histCount--;
+      }
+      s.hist[s.histCount++] = {(uint32_t)t, f};
+      s.dirty |= DIRTY_CHART;
+    }
   } else if (!strcmp(id, TRAM_ENTITY_LAST)) {
     if (!st["s"].is<const char*>()) return;
     uint32_t e;

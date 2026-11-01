@@ -314,6 +314,73 @@ static void test_pick_none() {
   CHECK(pickBss(l, 0) == -1);
 }
 
+#include "chart.h"
+#include "sleep_ctl.h"
+
+static void test_chart_scale() {
+  GapPoint a[] = {{1, 12.0f}, {2, 30.0f}, {3, 20.0f}};
+  ChartScale c = chartScale(a, 3);
+  CHECK(c.yMin == 10 && c.yMax == 32);
+  GapPoint one[] = {{1, 20.0f}};
+  c = chartScale(one, 1);
+  CHECK(c.yMin == 18 && c.yMax == 22);
+  c = chartScale(nullptr, 0);
+  CHECK(c.yMin == 0 && c.yMax == 30);
+  GapPoint low[] = {{1, 1.0f}};
+  c = chartScale(low, 1);
+  CHECK(c.yMin == 0 && c.yMax == 3);  // never below 0 minutes
+}
+
+static void test_chart_mapping() {
+  const uint32_t now = 1793570000u;
+  CHECK(chartX(now, now, 10, 200) == 210);
+  CHECK(chartX(now - 86400, now, 10, 200) == 10);
+  CHECK(chartX(now - 43200, now, 10, 200) == 110);
+  CHECK(chartX(now - 999999, now, 10, 200) == 10);  // older than 24 h clamps left
+  CHECK(chartX(now + 50, now, 10, 200) == 210);     // future clamps right
+  ChartScale c{10, 30};
+  CHECK(chartY(30, c, 100, 80) == 100);
+  CHECK(chartY(10, c, 100, 80) == 180);
+  CHECK(chartY(20, c, 100, 80) == 140);
+}
+
+static void test_sleep_button_c_toggles() {
+  SleepCtl z;
+  CHECK(sleepOnKey(z, KEY_C) == SLEEP_TURN_OFF && z.dark);
+  CHECK(sleepOnKey(z, KEY_C) == SLEEP_TURN_ON && !z.dark);
+}
+
+static void test_sleep_other_keys_wake_only() {
+  SleepCtl z;
+  CHECK(sleepOnKey(z, KEY_A) == SLEEP_PASS);   // awake: key goes to the page
+  sleepOnKey(z, KEY_C);
+  CHECK(sleepOnKey(z, KEY_A) == SLEEP_TURN_ON && !z.dark);
+  sleepOnKey(z, KEY_C);
+  CHECK(sleepOnKey(z, KEY_JOY_LEFT) == SLEEP_TURN_ON);
+  sleepOnKey(z, KEY_C);
+  CHECK(sleepOnKey(z, KEY_B) == SLEEP_TURN_ON);
+}
+
+static void test_gap_change_appends_chart_point() {
+  TramState s{};
+  applyHist(s, R"({"input_number.home_m1_tram_minutes_between_trams":[{"s":"20","lu":1793500000}]})");
+  s.dirty = 0;
+  applyJson(s, R"({"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"21.0","lc":1793570000.1}}}})");
+  CHECK(s.histCount == 2 && s.hist[1].t == 1793570000u && s.hist[1].v == 21.0f);
+  CHECK(s.dirty == (DIRTY_GAP | DIRTY_CHART));
+  TramState n{};  // before any history arrived: nothing appended
+  applyJson(n, R"({"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"21.0","lc":1793570000.1}}}})");
+  CHECK(n.histCount == 0 && !(n.dirty & DIRTY_CHART));
+}
+
+static void test_gap_append_full_drops_oldest() {
+  TramState s{};
+  s.histKnown = true; s.histCount = TRAM_MAX_HIST;
+  for (int i = 0; i < TRAM_MAX_HIST; i++) s.hist[i] = {1793400000u + i * 60u, (float)i};
+  applyJson(s, R"({"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"7","lc":1793570000}}}})");
+  CHECK(s.histCount == TRAM_MAX_HIST && s.hist[0].v == 1.0f && s.hist[TRAM_MAX_HIST - 1].v == 7.0f);
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -344,6 +411,12 @@ int main() {
   test_pick_skips_unknown_security();
   test_pick_strongest_supported();
   test_pick_none();
+  test_chart_scale();
+  test_chart_mapping();
+  test_sleep_button_c_toggles();
+  test_sleep_other_keys_wake_only();
+  test_gap_change_appends_chart_point();
+  test_gap_append_full_drops_oldest();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

@@ -8,7 +8,7 @@
 #include "wifi_pick.h"
 
 #define NTP_RESYNC_MS 3600000UL
-#define NTP_RETRY_MS  30000UL
+#define NTP_RETRY_MS  10000UL
 #define NTP_TIMEOUT_MS 3000UL
 
 static Backoff netBackoff;

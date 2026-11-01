@@ -1,0 +1,64 @@
+// Buttons, display sleep and the page table. One page for now (Tram); the
+// joystick left/right will switch pages once more are added.
+#pragma once
+#include <TFT_eSPI.h>
+#include "sleep_ctl.h"
+
+struct Page {
+  const char* name;
+  void (*draw)(bool full);
+  void (*key)(Key k);  // keys the page handles itself; may be null
+};
+
+static const uint8_t KEY_PINS[] = {WIO_KEY_A, WIO_KEY_B, WIO_KEY_C, WIO_5S_UP, WIO_5S_DOWN,
+                                   WIO_5S_LEFT, WIO_5S_RIGHT, WIO_5S_PRESS};  // order = enum Key
+#define KEY_COUNT 8
+#define DEBOUNCE_MS 30
+
+static bool keyDown[KEY_COUNT];
+static uint32_t keyChanged[KEY_COUNT];
+static SleepCtl uiSleep;
+static const Page* uiPages;
+static uint8_t uiPageCount = 0, uiPage = 0;
+static bool uiNeedFull = true;
+
+inline void uiInit(const Page* pages, uint8_t count) {
+  uiPages = pages;
+  uiPageCount = count;
+  for (uint8_t i = 0; i < KEY_COUNT; i++) pinMode(KEY_PINS[i], INPUT_PULLUP);
+  pinMode(LCD_BACKLIGHT, OUTPUT);
+  digitalWrite(LCD_BACKLIGHT, HIGH);
+}
+
+inline bool uiDark() { return uiSleep.dark; }
+
+static void uiKey(Key k) {
+  switch (sleepOnKey(uiSleep, k)) {
+    case SLEEP_TURN_OFF: digitalWrite(LCD_BACKLIGHT, LOW); return;
+    case SLEEP_TURN_ON: digitalWrite(LCD_BACKLIGHT, HIGH); uiNeedFull = true; return;
+    case SLEEP_PASS: break;
+  }
+  if (uiPageCount > 1 && (k == KEY_JOY_LEFT || k == KEY_JOY_RIGHT)) {
+    uiPage = (uiPage + (k == KEY_JOY_RIGHT ? 1 : uiPageCount - 1)) % uiPageCount;
+    uiNeedFull = true;
+    return;
+  }
+  if (uiPages[uiPage].key) uiPages[uiPage].key(k);
+}
+
+// Debounced press edges -> uiKey(); redraws the current page unless dark.
+inline void uiPoll() {
+  uint32_t ms = millis();
+  for (uint8_t i = 0; i < KEY_COUNT; i++) {
+    bool down = digitalRead(KEY_PINS[i]) == LOW;
+    if (down != keyDown[i] && ms - keyChanged[i] > DEBOUNCE_MS) {
+      keyDown[i] = down;
+      keyChanged[i] = ms;
+      if (down) uiKey((Key)i);
+    }
+  }
+  if (uiSleep.dark) return;  // no drawing while the backlight is off
+  bool full = uiNeedFull;
+  uiNeedFull = false;
+  uiPages[uiPage].draw(full);
+}
