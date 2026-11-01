@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <string>
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(c) do { if (c) g_pass++; else { g_fail++; printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -102,6 +103,129 @@ static void test_format_ago() {
   formatAgo(now, now + 5, b, sizeof(b)); CHECK_STR(b, "0 sec ago");  // clock skew
 }
 
+#include "tram_model.h"
+
+static const char INITIAL[] = R"({"a":{
+ "sensor.kuckhoffstr_berlin":{"s":"Next M1 at 22:58","a":{"departures":[
+   {"line_name":"M1","line_type":"tram","time":"22:58","timestamp":"2026-11-01T22:58:00+01:00","direction":"Schönhauser Allee/Bornholmer Str. -> Bus -> extra long tail","color":"#D82020","delay":120,"cancelled":false},
+   {"line_name":"M1","line_type":"tram","time":"23:08","timestamp":"2026-11-01T23:08:00+01:00","direction":"Niederschönhausen, Schillerstr.","color":"#D82020","delay":0,"cancelled":true},
+   {"line_name":"M1","line_type":"tram","time":"23:18","timestamp":"2026-11-01T23:18:00+01:00","direction":"Mitte, Am Kupfergraben","color":"#D82020","delay":null,"cancelled":false},
+   {"line_name":"M1","line_type":"tram","time":"23:38","timestamp":"2026-11-01T23:38:00+01:00","direction":"Niederschönhausen, Schillerstr.","color":"#D82020","delay":0,"cancelled":false}
+ ],"icon":"mdi:clock","friendly_name":"Kuckhoffstr. (Berlin) Departures"},"c":"x","lc":1793569000.5,"lu":1793569000.5},
+ "input_number.home_m1_tram_minutes_between_trams":{"s":"20.0","a":{"unit_of_measurement":"min"},"c":"y","lc":1793569736.37},
+ "sensor.home_m1_tram_last_departed":{"s":"2026-11-01T21:35:00+00:00","a":{"device_class":"timestamp"},"c":"z","lc":1793569737.2}
+}})";
+
+static void applyJson(TramState& s, const char* json) {
+  JsonDocument d;
+  CHECK(deserializeJson(d, json) == DeserializationError::Ok);
+  tramApplyEvent(s, d.as<JsonVariantConst>());
+}
+
+static void test_initial_event() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  CHECK(s.depKnown && s.depCount == 3);
+  CHECK_STR(s.dep[0].line, "M1");
+  CHECK_STR(s.dep[0].time, "22:58");
+  CHECK(s.dep[0].epoch == 1793570280u);
+  CHECK(s.dep[0].delayMin == 2);
+  CHECK(s.dep[0].color565 == 0xD904);
+  CHECK(strlen(s.dep[0].dir) == 39);
+  CHECK(strncmp(s.dep[0].dir, "Schoenhauser Allee", 18) == 0);  // umlaut folded
+  CHECK_STR(s.dep[1].time, "23:18");                            // cancelled one skipped
+  CHECK(s.dep[1].delayMin == 0);                                // null delay
+  CHECK_STR(s.dep[2].time, "23:38");
+  CHECK(s.gapKnown && s.gapMin == 20.0f);
+  CHECK(s.lastDeparted == 1793568900u);
+  CHECK(s.dirty == (DIRTY_NEXT | DIRTY_GAP | DIRTY_LAST));
+}
+
+static void test_gap_change_only() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  s.dirty = 0;
+  applyJson(s, R"({"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"21.0","lc":1793570000.1}}}})");
+  CHECK(s.gapMin == 21.0f);
+  CHECK(s.dirty == DIRTY_GAP);
+  CHECK(s.depCount == 3);
+}
+
+static void test_departures_change() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  s.dirty = 0;
+  applyJson(s, R"({"c":{"sensor.kuckhoffstr_berlin":{"+":{"s":"Next M1 at 23:18","a":{"departures":[
+    {"line_name":"M1","time":"23:18","timestamp":"2026-11-01T23:18:00+01:00","direction":"Mitte","color":"#D82020","delay":0,"cancelled":false}]}}}}})");
+  CHECK(s.depCount == 1 && s.dirty == DIRTY_NEXT);
+  CHECK_STR(s.dep[0].time, "23:18");
+}
+
+static void test_empty_and_cancelled() {
+  TramState s{};
+  applyJson(s, R"({"a":{"sensor.kuckhoffstr_berlin":{"s":"N/A","a":{"departures":[]}}}})");
+  CHECK(s.depKnown && s.depCount == 0);
+  applyJson(s, INITIAL);
+  applyJson(s, R"({"c":{"sensor.kuckhoffstr_berlin":{"+":{"a":{"departures":[
+    {"line_name":"M1","time":"23:18","timestamp":"2026-11-01T23:18:00+01:00","direction":"Mitte","color":"#D82020","delay":0,"cancelled":true}]}}}}})");
+  CHECK(s.depCount == 0);
+}
+
+static void test_state_only_change_keeps_departures() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  s.dirty = 0;
+  applyJson(s, R"({"c":{"sensor.kuckhoffstr_berlin":{"+":{"s":"Next M1 at 22:58","lu":1793570100.0}}}})");
+  CHECK(s.depCount == 3 && s.dirty == 0);
+}
+
+static void test_gap_unavailable_and_unknown_entity() {
+  TramState s{};
+  applyJson(s, INITIAL);
+  applyJson(s, R"({"c":{"input_number.home_m1_tram_minutes_between_trams":{"+":{"s":"unavailable"}},"light.other":{"+":{"s":"on"}}}})");
+  CHECK(!s.gapKnown);
+  applyJson(s, R"({"c":{"sensor.home_m1_tram_last_departed":{"+":{"s":"unknown"}}}})");
+  CHECK(s.lastDeparted == 0);
+}
+
+static void applyHist(TramState& s, const char* json) {
+  JsonDocument d;
+  CHECK(deserializeJson(d, json) == DeserializationError::Ok);
+  tramApplyHistory(s, d.as<JsonVariantConst>());
+}
+
+static void test_history_skips_non_numeric() {
+  TramState s{};
+  applyHist(s, R"({"input_number.home_m1_tram_minutes_between_trams":[
+    {"s":"20.0","a":{},"lu":1793500000.1},{"s":"unavailable","lu":1793500100.0},{"s":"30","lc":1793500200.0}]})");
+  CHECK(s.histKnown && s.histCount == 2);
+  CHECK(s.hist[0].t == 1793500000u && s.hist[0].v == 20.0f);
+  CHECK(s.hist[1].t == 1793500200u && s.hist[1].v == 30.0f);
+  CHECK(s.dirty & DIRTY_CHART);
+  applyHist(s, "{}");
+  CHECK(s.histKnown && s.histCount == 0);
+}
+
+static void test_history_keeps_latest_96() {
+  std::string j = "{\"input_number.home_m1_tram_minutes_between_trams\":[";
+  for (int i = 0; i < 120; i++) {
+    if (i) j += ",";
+    j += "{\"s\":\"" + std::to_string(i) + "\",\"lu\":" + std::to_string(1793400000 + i * 60) + "}";
+  }
+  j += "]}";
+  TramState s{};
+  applyHist(s, j.c_str());
+  CHECK(s.histCount == 96);
+  CHECK(s.hist[95].v == 119.0f && s.hist[0].v == 24.0f);
+}
+
+static void test_hex_to_565() {
+  CHECK(hexTo565("#D82020") == 0xD904);
+  CHECK(hexTo565("#FFFFFF") == 0xFFFF);
+  CHECK(hexTo565("bogus") == 0xF800);
+  CHECK(hexTo565(nullptr) == 0xF800);
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -113,6 +237,15 @@ int main() {
   test_countdown_clamps();
   test_unsynced_time();
   test_format_ago();
+  test_initial_event();
+  test_gap_change_only();
+  test_departures_change();
+  test_empty_and_cancelled();
+  test_state_only_change_keeps_departures();
+  test_gap_unavailable_and_unknown_entity();
+  test_history_skips_non_numeric();
+  test_history_keeps_latest_96();
+  test_hex_to_565();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }
