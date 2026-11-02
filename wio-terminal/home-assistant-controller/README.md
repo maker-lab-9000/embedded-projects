@@ -50,6 +50,8 @@ opens its settings; Power switches between heat and off (auto counts as on),
 Target changes in 0.5 °C steps within the thermostat's range (7–35 °C). The
 target is sent 1 s after the last press, so a run of presses makes one call.
 
+![Heating page](docs/images/heating-page.png) ![Thermostat settings](docs/images/heating-settings.png)
+
 Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
