@@ -1,4 +1,4 @@
-// Wio Terminal Home Assistant controller: Tram, Climate and Lights pages.
+// Wio Terminal Home Assistant controller: Tram, Climate, Lights and Heating pages.
 // See README.md. Secrets in secrets.h (copy secrets.h.example).
 #include <TFT_eSPI.h>
 #include "net.h"
@@ -6,6 +6,7 @@
 #include "page_tram.h"
 #include "page_climate.h"
 #include "page_lights.h"
+#include "page_heating.h"
 #include "ui.h"
 #include "wdt.h"
 
@@ -13,6 +14,7 @@ static TFT_eSPI tft;
 static TramState tram{};
 static ClimateState climate{};
 static LightsState lights{};
+static HeatingState heating{};
 
 static void drawTramPage(bool full) {
   uint32_t t0 = millis();
@@ -39,10 +41,28 @@ static bool lightsKey(Key k) {
   return true;
 }
 
+static void drawHeatingPage(bool full) {
+  heatingDraw(tft, heating, nowUtc(), haStatus(), full);
+}
+
+static void sendHeating(HeatAction a) {
+  if (a.kind == HA_NONE_ACT) return;
+  if (!haCallHeating(a)) { Serial.println("heating: not connected, nothing sent"); return; }
+  if (a.kind == HA_SET_MODE) heatingApplyAction(heating, a);  // targets are applied by the model
+}
+
+static bool heatingKey(Key k) {
+  HeatAction a;
+  if (!heatingOnKey(heating, k, millis(), a)) return false;
+  sendHeating(a);
+  return true;
+}
+
 static const Page PAGES[] = {
   {"Tram", drawTramPage, nullptr},
   {"Climate", drawClimatePage, nullptr},
   {"Lights", drawLightsPage, lightsKey},
+  {"Heating", drawHeatingPage, heatingKey},
 };
 
 void setup() {
@@ -60,7 +80,7 @@ void setup() {
   uiInit(PAGES, sizeof(PAGES) / sizeof(PAGES[0]));
   uiPoll();  // first paint before the (blocking) WiFi scan
   netInit();
-  haInit(&tram, &climate, &lights);
+  haInit(&tram, &climate, &lights, &heating);
 }
 
 // Serial 's': raw RGB565 screenshot ("SHOT\n" + 320*240*2 bytes, big-endian rows).
@@ -83,6 +103,8 @@ void loop() {
   wdtCrumb(5);
   uiPoll();
   wdtCrumb(6);
+  HeatAction due;
+  if (heatingDue(heating, millis(), due)) sendHeating(due);  // target, after the presses stop
   if (Serial.available()) {
     int c = Serial.read();
     if (c == 'r') haForceReconnect();   // test reconnects

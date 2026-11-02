@@ -6,8 +6,6 @@
 #include "lights_model.h"
 #include "header.h"
 
-#define C_SEL 0x2945  // #2a2a2a, selected row
-
 #define LT_Y0     26
 #define LT_ROW_H  32
 #define LT_PANEL_Y (LT_Y0 + LIGHT_COUNT * LT_ROW_H + 5)

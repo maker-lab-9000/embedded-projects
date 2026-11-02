@@ -230,10 +230,11 @@ static void test_hex_to_565() {
 
 static ClimateState g_climate{};  // tram tests don't look at these
 static LightsState g_lights{};
+static HeatingState g_heating{};
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, g_climate, g_lights, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, g_lights, g_heating, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -388,7 +389,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, g_climate, g_lights, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, g_lights, g_heating, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -538,7 +539,8 @@ static void test_subscribe_lists_all_entities() {
   CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
   JsonDocument d;
   CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
-  CHECK(d["entity_ids"].size() == 16);
+  CHECK(d["entity_ids"].size() == 18);
+  CHECK(strstr(buf, "\"climate.thermostat_14\"") && strstr(buf, "\"climate.thermostat_15\""));
   for (const LightDef& l : LIGHTS) {
     std::string q = std::string("\"") + l.id + "\"";
     CHECK(strstr(buf, q.c_str()) != nullptr);
@@ -553,8 +555,8 @@ static void test_routing_reaches_climate() {
   JsonDocument d;
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
                   DeserializationOption::Filter(f));
-  LightsState L{};
-  haHandleMessage(p, s, c, L, d.as<JsonVariantConst>());
+  LightsState L{}; HeatingState H{};
+  haHandleMessage(p, s, c, L, H, d.as<JsonVariantConst>());
   CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
 }
 
@@ -565,7 +567,8 @@ static void applyLights(LightsState& L, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{};
-  haHandleMessage(p, t, c, L, d.as<JsonVariantConst>());
+  HeatingState H{};
+  haHandleMessage(p, t, c, L, H, d.as<JsonVariantConst>());
 }
 
 static void test_lights_defs() {
@@ -712,6 +715,123 @@ static void test_light_swatch() {
   CHECK(lightSwatch565(s) == 0);                             // 0 = draw as off
 }
 
+#include "heating_model.h"
+
+static void applyHeating(HeatingState& H, const char* json) {
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
+  HaProto p; TramState t{}; ClimateState c{}; LightsState L{};
+  haHandleMessage(p, t, c, L, H, d.as<JsonVariantConst>());
+}
+
+static void test_heating_defs() {
+  CHECK_STR(THERMOS[0].name, "Theo's room"); CHECK_STR(THERMOS[0].id, "climate.thermostat_14");
+  CHECK_STR(THERMOS[1].name, "Living room"); CHECK_STR(THERMOS[1].id, "climate.thermostat_15");
+}
+
+static void test_heating_state_from_events() {
+  HeatingState H{};
+  applyHeating(H, R"({"id":1,"type":"event","event":{"a":{
+    "climate.thermostat_14":{"s":"off","a":{"hvac_modes":["heat","off","auto"],"min_temp":7,"max_temp":35,"current_temperature":16.0,"temperature":15.0,"hvac_action":"off","offset":0}},
+    "climate.thermostat_15":{"s":"heat","a":{"min_temp":5,"max_temp":30,"current_temperature":17.5,"temperature":21.5,"hvac_action":"heating"}}}}})");
+  const ThermoState& a = H.t[0];
+  CHECK(a.known && a.available && a.mode == HV_OFF && !a.heating);
+  CHECK(a.hasCurrent && a.current == 16.0f && a.hasTarget && a.target == 15.0f);
+  CHECK(a.minT == 7 && a.maxT == 35);
+  const ThermoState& b = H.t[1];
+  CHECK(b.mode == HV_HEAT && b.heating && b.target == 21.5f && b.minT == 5 && b.maxT == 30);
+  CHECK(H.dirty == 3);
+  H.dirty = 0;
+  applyHeating(H, R"({"id":1,"type":"event","event":{"c":{"climate.thermostat_15":{"+":{"a":{"hvac_action":"idle"}}}}}})");
+  CHECK(!H.t[1].heating && H.t[1].mode == HV_HEAT && H.dirty == 2);
+  applyHeating(H, R"({"id":1,"type":"event","event":{"c":{"climate.thermostat_14":{"+":{"s":"auto"}}}}})");
+  CHECK(H.t[0].mode == HV_AUTO && thermoIsOn(H.t[0]));
+  applyHeating(H, R"({"id":1,"type":"event","event":{"c":{"climate.thermostat_14":{"+":{"s":"unavailable","a":{"current_temperature":null}}}}}})");
+  CHECK(!H.t[0].available && H.t[0].hasCurrent);     // null keeps the last value
+}
+
+static HeatingState heatingFixture() {
+  HeatingState H{};
+  for (ThermoState& t : H.t) { t.known = t.available = true; t.mode = HV_OFF; t.hasTarget = true; t.target = 15; t.minT = 7; t.maxT = 35; }
+  return H;
+}
+
+static void test_heating_keys_navigation() {
+  HeatingState H = heatingFixture();
+  HeatAction a;
+  CHECK(heatingOnKey(H, KEY_JOY_DOWN, 0, a) && H.sel == 1 && a.kind == HA_NONE_ACT);
+  CHECK(heatingOnKey(H, KEY_JOY_DOWN, 0, a) && H.sel == 1);   // clamps
+  CHECK(!heatingOnKey(H, KEY_JOY_LEFT, 0, a));                // list: page switching
+  CHECK(heatingOnKey(H, KEY_JOY_PRESS, 0, a) && H.editing && H.field == HF_POWER);
+  CHECK(heatingOnKey(H, KEY_JOY_DOWN, 0, a) && H.field == HF_TARGET);
+  CHECK(heatingOnKey(H, KEY_JOY_DOWN, 0, a) && H.field == HF_TARGET);
+  CHECK(heatingOnKey(H, KEY_B, 0, a) && !H.editing);
+  CHECK(H.uiDirty);
+}
+
+static void test_heating_power() {
+  HeatingState H = heatingFixture();
+  H.editing = true; H.field = HF_POWER;
+  HeatAction a;
+  heatingOnKey(H, KEY_JOY_RIGHT, 0, a);
+  CHECK(a.kind == HA_SET_MODE && a.thermo == 0 && a.mode == HV_HEAT);
+  H.t[0].mode = HV_AUTO;
+  heatingOnKey(H, KEY_JOY_LEFT, 0, a);
+  CHECK(a.kind == HA_SET_MODE && a.mode == HV_OFF);
+  H.t[0].available = false;
+  heatingOnKey(H, KEY_JOY_LEFT, 0, a);
+  CHECK(a.kind == HA_NONE_ACT);
+}
+
+static void test_heating_target_debounced() {
+  HeatingState H = heatingFixture();
+  H.sel = 1; H.editing = true; H.field = HF_TARGET;
+  HeatAction a;
+  for (int i = 0; i < 3; i++) { heatingOnKey(H, KEY_JOY_RIGHT, 1000 + i * 200, a); CHECK(a.kind == HA_NONE_ACT); }
+  CHECK(H.pending && H.pendingTarget == 16.5f && thermoShownTarget(H, 1) == 16.5f);
+  CHECK(!heatingDue(H, 1400 + 999, a));                       // 1 s after the last press
+  CHECK(heatingDue(H, 1400 + 1000, a) && a.kind == HA_SET_TEMP && a.thermo == 1 && a.temp == 16.5f);
+  CHECK(!H.pending && H.t[1].target == 16.5f);
+  CHECK(!heatingDue(H, 5000, a));
+  // A push from HA while a change is pending doesn't move the shown target.
+  heatingOnKey(H, KEY_JOY_LEFT, 6000, a);
+  H.t[1].target = 16.5f;
+  CHECK(thermoShownTarget(H, 1) == 16.0f);
+  // Clamped to the thermostat's range.
+  H.pendingTarget = 35; heatingOnKey(H, KEY_JOY_RIGHT, 6100, a);
+  CHECK(H.pendingTarget == 35);
+  // Switching to the other thermostat sends the pending one right away.
+  H.editing = false;
+  heatingOnKey(H, KEY_JOY_UP, 6200, a);
+  CHECK(a.kind == HA_SET_TEMP && a.thermo == 1 && a.temp == 35 && !H.pending);
+}
+
+static void test_heating_call_json() {
+  char buf[256];
+  JsonDocument d;
+  HeatAction a{HA_SET_MODE, 0, HV_HEAT, 0};
+  CHECK(heatBuildCall(buf, sizeof(buf), 7, a));
+  deserializeJson(d, buf);
+  CHECK(d["id"] == 7 && d["type"] == "call_service" && d["domain"] == "climate" && d["service"] == "set_hvac_mode");
+  CHECK(d["service_data"]["hvac_mode"] == "heat" && d["target"]["entity_id"] == "climate.thermostat_14");
+  a = {HA_SET_MODE, 1, HV_OFF, 0};
+  heatBuildCall(buf, sizeof(buf), 8, a); deserializeJson(d, buf);
+  CHECK(d["service_data"]["hvac_mode"] == "off" && d["target"]["entity_id"] == "climate.thermostat_15");
+  a = {HA_SET_TEMP, 1, HV_OFF, 21.5f};
+  heatBuildCall(buf, sizeof(buf), 9, a); deserializeJson(d, buf);
+  CHECK(d["service"] == "set_temperature" && d["service_data"]["temperature"] == 21.5);
+  CHECK(!heatBuildCall(buf, 20, 10, a));
+  a.kind = HA_NONE_ACT;
+  CHECK(!heatBuildCall(buf, sizeof(buf), 11, a));
+}
+
+static void test_heating_optimistic_mode() {
+  HeatingState H = heatingFixture();
+  heatingApplyAction(H, {HA_SET_MODE, 1, HV_HEAT, 0});
+  CHECK(H.t[1].mode == HV_HEAT && (H.dirty & 2));
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -771,6 +891,13 @@ int main() {
   test_light_call_json();
   test_light_optimistic_update();
   test_light_swatch();
+  test_heating_defs();
+  test_heating_state_from_events();
+  test_heating_keys_navigation();
+  test_heating_power();
+  test_heating_target_debounced();
+  test_heating_call_json();
+  test_heating_optimistic_mode();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

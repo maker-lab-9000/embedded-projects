@@ -16,6 +16,7 @@
 #define C_GREEN  0x07E0
 #define C_YELLOW 0xFFE0
 #define C_RED    0xF800
+#define C_SEL    0x2945  // #2a2a2a, selected row
 
 #define Y_HEAD   0
 #define H_HEAD   24
