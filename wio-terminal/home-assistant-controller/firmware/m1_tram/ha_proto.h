@@ -7,6 +7,7 @@
 #include "climate_model.h"
 #include "lights_model.h"
 #include "heating_model.h"
+#include "power_model.h"
 #include "timeutil.h"
 
 enum HaAction : uint8_t { HA_ACT_NONE, HA_ACT_SEND_AUTH, HA_ACT_SUBSCRIBE, HA_ACT_REJECTED };
@@ -52,7 +53,7 @@ inline void haBuildFilter(JsonDocument& f) {
   chg["-"] = true;
 }
 
-inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, LightsState& L, HeatingState& H, JsonVariantConst msg) {
+inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, LightsState& L, HeatingState& H, PowerState& P, JsonVariantConst msg) {
   const char* type = msg["type"] | "";
   uint32_t id = msg["id"] | 0u;
   if (!strcmp(type, "auth_required")) return HA_ACT_SEND_AUTH;
@@ -63,6 +64,7 @@ inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, Light
     climateApplyEvent(c, msg["event"]);
     lightsApplyEvent(L, msg["event"]);
     heatingApplyEvent(H, msg["event"]);
+    powerApplyEvent(P, msg["event"]);
   } else if (!strcmp(type, "result") && id != 0 && id == p.histPending) {
     p.histPending = 0;
     if (msg["success"] | false) tramApplyHistory(s, msg["result"]);
@@ -90,6 +92,8 @@ inline bool haBuildSubscribe(char* buf, size_t n) {
   for (const ClimatePm& pm : CLIMATE_PM) addId(pm.id);
   for (const LightDef& l : LIGHTS) addId(l.id);
   for (const ThermoDef& t : THERMOS) addId(t.id);
+  addId(POWER_TOTAL_ID);
+  for (const PowerDevice& d : POWER_DEVICES) addId(d.id);
   add("]}");
   return o < n;
 }

@@ -231,10 +231,11 @@ static void test_hex_to_565() {
 static ClimateState g_climate{};  // tram tests don't look at these
 static LightsState g_lights{};
 static HeatingState g_heating{};
+static PowerState g_power{};
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, g_climate, g_lights, g_heating, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -389,7 +390,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, g_climate, g_lights, g_heating, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -526,8 +527,59 @@ static void test_climate_format() {
   climateFormat({0, false}, 1, b, sizeof(b)); CHECK_STR(b, "--");
 }
 
+#include "power_model.h"
+
+static void test_power_defs() {
+  CHECK_STR(POWER_TOTAL_ID, "sensor.home_plugs_total_power");
+  CHECK(POWER_DEVICE_COUNT == 7);
+  CHECK_STR(POWER_DEVICES[0].name, "Homelab");         CHECK_STR(POWER_DEVICES[0].id, "sensor.power_23");
+  CHECK_STR(POWER_DEVICES[1].name, "Workstation");     CHECK_STR(POWER_DEVICES[1].id, "sensor.wiz_socket_power");
+  CHECK_STR(POWER_DEVICES[2].name, "Washing machine"); CHECK_STR(POWER_DEVICES[2].id, "sensor.wasching_machine_plug");
+  CHECK_STR(POWER_DEVICES[3].name, "Dishwasher");      CHECK_STR(POWER_DEVICES[3].id, "sensor.power_36");
+  CHECK_STR(POWER_DEVICES[4].name, "Fridge");          CHECK_STR(POWER_DEVICES[4].id, "sensor.power_27");
+  CHECK_STR(POWER_DEVICES[5].name, "TV & Audio");      CHECK_STR(POWER_DEVICES[5].id, "sensor.power_30");
+  CHECK_STR(POWER_DEVICES[6].name, "TV & Audio 2");    CHECK_STR(POWER_DEVICES[6].id, "sensor.power_32");
+}
+
+static void test_power_event() {
+  PowerState P{};
+  JsonDocument d;
+  deserializeJson(d, R"({"a":{"sensor.home_plugs_total_power":{"s":"123.1"},"sensor.power_27":{"s":"64"},
+    "sensor.wiz_socket_power":{"s":"22.116"},"sensor.babyroom":{"s":"19"}}})");
+  powerApplyEvent(P, d.as<JsonVariantConst>());
+  CHECK(P.total.known && P.total.v == 123.1f);
+  CHECK(P.dev[4].known && P.dev[4].v == 64.0f);
+  CHECK(P.dev[1].known && P.dev[1].v == 22.116f);
+  CHECK(!P.dev[0].known);
+  CHECK(P.dirty == (POWER_DIRTY_TOTAL | POWER_DIRTY_DEV(1) | POWER_DIRTY_DEV(4)));
+  P.dirty = 0;
+  deserializeJson(d, R"({"c":{"sensor.power_27":{"+":{"s":"unavailable"}},"sensor.power_23":{"+":{"lc":1.0}}}})");
+  powerApplyEvent(P, d.as<JsonVariantConst>());
+  CHECK(!P.dev[4].known);
+  CHECK(!P.dev[0].known);                  // no state: ignored
+  CHECK(P.dirty == POWER_DIRTY_DEV(4));
+}
+
+static void test_power_format() {
+  char b[16];
+  powerFormat({22.116f, true}, b, sizeof(b));  CHECK_STR(b, "22");
+  powerFormat({0.4f, true}, b, sizeof(b));     CHECK_STR(b, "0");
+  powerFormat({1234.0f, true}, b, sizeof(b));  CHECK_STR(b, "1234");
+  powerFormat({0, false}, b, sizeof(b));       CHECK_STR(b, "--");
+}
+
+static void test_power_share() {
+  CHECK(powerShare({64, true}, {123.1f, true}) > 0.51f && powerShare({64, true}, {123.1f, true}) < 0.53f);
+  CHECK(powerShare({0, true}, {100, true}) == 0);
+  CHECK(powerShare({10, true}, {0, true}) == 0);     // total 0: no bar
+  CHECK(powerShare({200, true}, {100, true}) == 1);  // clamped
+  CHECK(powerShare({10, false}, {100, true}) == 0);
+  CHECK(powerShare({10, true}, {100, false}) == 0);
+  CHECK(powerShare({-5, true}, {100, true}) == 0);
+}
+
 static void test_subscribe_lists_all_entities() {
-  char buf[700];
+  char buf[1024];
   CHECK(haBuildSubscribe(buf, sizeof(buf)));
   CHECK(strstr(buf, "\"type\":\"subscribe_entities\"") != nullptr);
   CHECK(strstr(buf, "\"sensor.kuckhoffstr_berlin\"") != nullptr);
@@ -539,7 +591,12 @@ static void test_subscribe_lists_all_entities() {
   CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
   JsonDocument d;
   CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
-  CHECK(d["entity_ids"].size() == 18);
+  CHECK(d["entity_ids"].size() == 26);
+  CHECK(strstr(buf, "\"sensor.home_plugs_total_power\"") != nullptr);
+  for (const PowerDevice& pd : POWER_DEVICES) {
+    std::string q = std::string("\"") + pd.id + "\"";
+    CHECK(strstr(buf, q.c_str()) != nullptr);
+  }
   CHECK(strstr(buf, "\"climate.thermostat_14\"") && strstr(buf, "\"climate.thermostat_15\""));
   for (const LightDef& l : LIGHTS) {
     std::string q = std::string("\"") + l.id + "\"";
@@ -556,8 +613,18 @@ static void test_routing_reaches_climate() {
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
                   DeserializationOption::Filter(f));
   LightsState L{}; HeatingState H{};
-  haHandleMessage(p, s, c, L, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, H, g_power, d.as<JsonVariantConst>());
   CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
+}
+
+static void test_routing_reaches_power() {
+  HaProto p; TramState s{}; ClimateState c{}; LightsState L{}; HeatingState H{}; PowerState P{};
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.home_plugs_total_power":{"+":{"s":"98.5","lc":1.0}}}}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, H, P, d.as<JsonVariantConst>());
+  CHECK(P.total.known && P.total.v == 98.5f);
 }
 
 #include "lights_model.h"
@@ -568,7 +635,7 @@ static void applyLights(LightsState& L, const char* json) {
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{};
   HeatingState H{};
-  haHandleMessage(p, t, c, L, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, d.as<JsonVariantConst>());
 }
 
 static void test_lights_defs() {
@@ -722,7 +789,7 @@ static void applyHeating(HeatingState& H, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{}; LightsState L{};
-  haHandleMessage(p, t, c, L, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, d.as<JsonVariantConst>());
 }
 
 static void test_heating_defs() {
@@ -898,6 +965,11 @@ int main() {
   test_heating_target_debounced();
   test_heating_call_json();
   test_heating_optimistic_mode();
+  test_power_defs();
+  test_power_event();
+  test_power_format();
+  test_power_share();
+  test_routing_reaches_power();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

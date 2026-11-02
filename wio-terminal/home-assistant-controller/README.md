@@ -52,6 +52,16 @@ target is sent 1 s after the last press, so a run of presses makes one call.
 
 ![Heating page](docs/images/heating-page.png) ![Thermostat settings](docs/images/heating-settings.png)
 
+**Power**: "Using now · all plugs" (`sensor.home_plugs_total_power`) from
+the Power dashboard, then each plug in watts with a bar for its share of the
+total: Homelab (`sensor.power_23`), Workstation (`sensor.wiz_socket_power`),
+Washing machine (`sensor.wasching_machine_plug`), Dishwasher
+(`sensor.power_36`), Fridge (`sensor.power_27`), TV & Audio
+(`sensor.power_30`), TV & Audio 2 (`sensor.power_32`). Plugs under 1 W are
+greyed out.
+
+![Power page](docs/images/power-page.png)
+
 Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
@@ -131,6 +141,7 @@ or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 | `page_climate.h` | climate page drawing |
 | `lights_model.h`, `page_lights.h` | lamp state, keys, service calls (pure); lights page drawing |
 | `heating_model.h`, `page_heating.h` | thermostat state, keys, debounced target (pure); heating page drawing |
+| `power_model.h`, `page_power.h` | plug power readings, bar share (pure); power page drawing |
 | `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
 | `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
 | `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |
