@@ -2,7 +2,7 @@
 
 A Seeed Wio Terminal that shows Home Assistant dashboards. Joystick
 left/right switches pages. A battery meter sits in the top-left corner when
-the battery chassis is attached. Backlight runs at 35 %.
+the battery chassis is attached. Backlight runs at 18 %.
 
 **Tram**: when the next M1 leaves Kuckhoffstr. (green tram), when the last
 one left (red tram), and a 24 h chart of the minutes between trams.
@@ -56,7 +56,7 @@ Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
 
-- **C** (leftmost top button): display off / on (35 % brightness). The connection stays up while dark.
+- **C** (leftmost top button): display off / on (18 % brightness). The connection stays up while dark.
 - **A**, **B**, joystick: wake the display when it is off.
 
 ## Setup

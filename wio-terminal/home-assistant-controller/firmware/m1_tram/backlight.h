@@ -6,7 +6,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define BACKLIGHT_DEFAULT 35  // percent
+#define BACKLIGHT_DEFAULT 18  // percent
 
 inline void backlightSet(uint8_t percent) {
   if (percent > 100) percent = 100;
