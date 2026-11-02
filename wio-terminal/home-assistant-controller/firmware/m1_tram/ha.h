@@ -20,12 +20,21 @@ static HaProto haP;
 static Backoff haBackoff;
 static TramState* haState = nullptr;
 static ClimateState* haClimate = nullptr;
+static LightsState* haLights = nullptr;
 static HaStatus haSt = HA_OFFLINE;
 static uint32_t haNextTry = 0, haConnStart = 0, haHistDue = 0, haPingDue = 0, haPingSent = 0;
 static uint32_t haNextId = 2;
 
 inline HaStatus haStatus() { return haSt; }
-inline void haInit(TramState* s, ClimateState* c) { haState = s; haClimate = c; }
+inline void haInit(TramState* s, ClimateState* c, LightsState* l) { haState = s; haClimate = c; haLights = l; }
+
+// Sends a light service call; false when not connected (nothing is queued).
+inline bool haCallLight(LightAction a) {
+  if (haSt != HA_CONNECTED) return false;
+  char req[256];
+  if (!lightBuildCall(req, sizeof(req), haNextId++, a)) return false;
+  return haWs.sendText(req);
+}
 
 inline void haDrop(const char* why) {
   haWs.close();
@@ -60,7 +69,7 @@ inline void haHandle() {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, haWs.msg(), haWs.msgLen(), DeserializationOption::Filter(filter));
   if (err) { Serial.print("ha: json "); Serial.println(err.c_str()); return; }
-  switch (haHandleMessage(haP, *haState, *haClimate, doc.as<JsonVariantConst>())) {
+  switch (haHandleMessage(haP, *haState, *haClimate, *haLights, doc.as<JsonVariantConst>())) {
     case HA_ACT_SEND_AUTH:
       haWs.sendText("{\"type\":\"auth\",\"access_token\":\"" HA_TOKEN "\"}");
       break;
@@ -86,7 +95,7 @@ inline void haHandle() {
 }
 
 inline void haPoll() {
-  if (!haState || !haClimate || haSt == HA_AUTH_REJECTED) return;
+  if (!haState || !haClimate || !haLights || haSt == HA_AUTH_REJECTED) return;
   uint32_t ms = millis();
   if (haSt == HA_OFFLINE) {
     if (!netUp() || (int32_t)(ms - haNextTry) < 0) return;

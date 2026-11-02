@@ -18,6 +18,9 @@
   its entity ids in `haBuildSubscribe()` and its apply call in
   `haHandleMessage()` (`ha_proto.h`), and a row in `PAGES[]` in
   `m1_tram.ino`.
+- **Simulated keys switch real lamps.** Serial `L`/`R` on the Lights
+  settings call Home Assistant; don't send them in tests unless the user
+  agreed. Navigation (`U`/`D`/`P`/`B`) is safe.
 - **`arduino-cli upload` doesn't compile.** Run `arduino-cli compile` first
   or you flash the previous build.
 - **Serial port is not a neutral observer.** Reopening the port in a loop

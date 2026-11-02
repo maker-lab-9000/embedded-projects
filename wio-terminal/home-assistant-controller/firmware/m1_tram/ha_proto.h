@@ -5,6 +5,7 @@
 #include <string.h>
 #include "tram_model.h"
 #include "climate_model.h"
+#include "lights_model.h"
 #include "timeutil.h"
 
 enum HaAction : uint8_t { HA_ACT_NONE, HA_ACT_SEND_AUTH, HA_ACT_SUBSCRIBE, HA_ACT_REJECTED };
@@ -27,19 +28,27 @@ struct Backoff {
   void reset() { cur = 5000; }
 };
 
+// Attributes the models read: tram departures, light brightness and colour.
+inline void haFilterAttrs(JsonObject a) {
+  a["departures"] = true;
+  a["brightness"] = true; a["color_mode"] = true; a["color_temp_kelvin"] = true; a["hs_color"] = true;
+}
+
 // ArduinoJson filter for incoming messages: keeps only what the model reads
 // (the departures sensor carries many other attributes).
 inline void haBuildFilter(JsonDocument& f) {
   f["type"] = true; f["id"] = true; f["success"] = true; f["result"] = true;
   JsonObject ent = f["event"]["a"]["*"].to<JsonObject>();
-  ent["s"] = true; ent["a"]["departures"] = true; ent["lc"] = true; ent["lu"] = true;
+  ent["s"] = true; ent["lc"] = true; ent["lu"] = true;
+  haFilterAttrs(ent["a"].to<JsonObject>());
   JsonObject chg = f["event"]["c"]["*"].to<JsonObject>();
   JsonObject plus = chg["+"].to<JsonObject>();
-  plus["s"] = true; plus["a"]["departures"] = true; plus["lc"] = true; plus["lu"] = true;
+  plus["s"] = true; plus["lc"] = true; plus["lu"] = true;
+  haFilterAttrs(plus["a"].to<JsonObject>());
   chg["-"] = true;
 }
 
-inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, JsonVariantConst msg) {
+inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, LightsState& L, JsonVariantConst msg) {
   const char* type = msg["type"] | "";
   uint32_t id = msg["id"] | 0u;
   if (!strcmp(type, "auth_required")) return HA_ACT_SEND_AUTH;
@@ -48,6 +57,7 @@ inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, JsonV
   if (!strcmp(type, "event") && id == p.subId) {
     tramApplyEvent(s, msg["event"]);
     climateApplyEvent(c, msg["event"]);
+    lightsApplyEvent(L, msg["event"]);
   } else if (!strcmp(type, "result") && id != 0 && id == p.histPending) {
     p.histPending = 0;
     if (msg["success"] | false) tramApplyHistory(s, msg["result"]);
@@ -73,6 +83,7 @@ inline bool haBuildSubscribe(char* buf, size_t n) {
   addId(TRAM_ENTITY_DEPARTURES); addId(TRAM_ENTITY_GAP); addId(TRAM_ENTITY_LAST);
   for (const ClimateRoom& r : CLIMATE_ROOMS) { addId(r.temp); addId(r.hum); }
   for (const ClimatePm& pm : CLIMATE_PM) addId(pm.id);
+  for (const LightDef& l : LIGHTS) addId(l.id);
   add("]}");
   return o < n;
 }

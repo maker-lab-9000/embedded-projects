@@ -228,11 +228,12 @@ static void test_hex_to_565() {
 
 #include "ha_proto.h"
 
-static ClimateState g_climate{};  // tram tests don't look at it
+static ClimateState g_climate{};  // tram tests don't look at these
+static LightsState g_lights{};
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, g_climate, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, g_lights, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -387,7 +388,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, g_climate, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, g_lights, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -537,7 +538,11 @@ static void test_subscribe_lists_all_entities() {
   CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
   JsonDocument d;
   CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
-  CHECK(d["entity_ids"].size() == 13);
+  CHECK(d["entity_ids"].size() == 16);
+  for (const LightDef& l : LIGHTS) {
+    std::string q = std::string("\"") + l.id + "\"";
+    CHECK(strstr(buf, q.c_str()) != nullptr);
+  }
   char tiny[40];
   CHECK(!haBuildSubscribe(tiny, sizeof(tiny)));  // reports truncation
 }
@@ -548,8 +553,163 @@ static void test_routing_reaches_climate() {
   JsonDocument d;
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
                   DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, d.as<JsonVariantConst>());
+  LightsState L{};
+  haHandleMessage(p, s, c, L, d.as<JsonVariantConst>());
   CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
+}
+
+#include "lights_model.h"
+
+static void applyLights(LightsState& L, const char* json) {
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
+  HaProto p; TramState t{}; ClimateState c{};
+  haHandleMessage(p, t, c, L, d.as<JsonVariantConst>());
+}
+
+static void test_lights_defs() {
+  CHECK_STR(LIGHTS[0].name, "Philips lamp"); CHECK_STR(LIGHTS[0].id, "light.philips_lamp");
+  CHECK_STR(LIGHTS[1].name, "Tripod lamp");  CHECK_STR(LIGHTS[1].id, "light.extended_color_light_10");
+  CHECK_STR(LIGHTS[2].name, "Moon lamp");    CHECK_STR(LIGHTS[2].id, "light.extended_color_light_8");
+}
+
+static void test_lights_state_from_events() {
+  LightsState L{};
+  // Full state through the real message filter (extra attributes dropped).
+  applyLights(L, R"({"id":1,"type":"event","event":{"a":{
+    "light.philips_lamp":{"s":"on","a":{"brightness":128,"color_mode":"color_temp","color_temp_kelvin":2702,"hs_color":[28.4,65.6],"effect_list":["a"]}},
+    "light.extended_color_light_10":{"s":"on","a":{"brightness":255,"color_mode":"xy","hs_color":[231.0,98.0]}},
+    "light.extended_color_light_8":{"s":"unavailable","a":{}}}}})");
+  const LightState& a = L.l[0];
+  CHECK(a.known && a.available && a.on && a.brightness == 128 && a.mode == LM_CT && a.kelvin == 2702);
+  const LightState& b = L.l[1];
+  CHECK(b.on && b.mode == LM_HS && b.hue == 231.0f && b.sat == 98.0f);
+  CHECK(L.l[2].known && !L.l[2].available && !L.l[2].on);
+  CHECK(L.dirty == 7);
+  L.dirty = 0;
+  // Turning off: HA sends nulls for the colour attributes.
+  applyLights(L, R"({"id":1,"type":"event","event":{"c":{"light.philips_lamp":{"+":{"s":"off","a":{"brightness":null,"color_mode":null}}}}}})");
+  CHECK(!L.l[0].on && L.l[0].available && L.dirty == 1);
+  // Brightness-only change keeps the state.
+  applyLights(L, R"({"id":1,"type":"event","event":{"c":{"light.extended_color_light_10":{"+":{"a":{"brightness":51}}}}}})");
+  CHECK(L.l[1].on && L.l[1].brightness == 51);
+}
+
+static void test_brightness_pct_and_steps() {
+  CHECK(lightPct(255) == 100 && lightPct(128) == 50 && lightPct(3) == 1 && lightPct(0) == 0);
+  CHECK(lightStepPct(50, true) == 60);
+  CHECK(lightStepPct(55, true) == 60);
+  CHECK(lightStepPct(100, true) == 100);
+  CHECK(lightStepPct(0, true) == 10);
+  CHECK(lightStepPct(50, false) == 40);
+  CHECK(lightStepPct(55, false) == 50);
+  CHECK(lightStepPct(10, false) == 1);
+  CHECK(lightStepPct(1, false) == 1);
+}
+
+static void test_colour_preset_match() {
+  LightState s{}; s.known = s.available = s.on = true;
+  s.mode = LM_CT; s.kelvin = 2702;
+  CHECK_STR(COLOUR_PRESETS[lightPresetIndex(s)].name, "Warm white");
+  s.kelvin = 6400;
+  CHECK_STR(COLOUR_PRESETS[lightPresetIndex(s)].name, "Cool white");
+  s.kelvin = 5200;
+  CHECK(lightPresetIndex(s) == -1);           // between presets: "Custom"
+  s.mode = LM_HS; s.hue = 231; s.sat = 98;
+  CHECK_STR(COLOUR_PRESETS[lightPresetIndex(s)].name, "Blue");
+  s.hue = 355; s.sat = 90;
+  CHECK_STR(COLOUR_PRESETS[lightPresetIndex(s)].name, "Red");  // hue wraps
+  s.sat = 20;
+  CHECK(lightPresetIndex(s) == -1);
+}
+
+static void test_lights_keys_navigation() {
+  LightsState L{}; L.l[0].known = L.l[0].available = true;
+  LightAction a;
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.sel == 1 && a.kind == LA_NONE);
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.sel == 2);
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.sel == 2);      // clamps
+  CHECK(lightsOnKey(L, KEY_JOY_UP, a) && L.sel == 1);
+  CHECK(!lightsOnKey(L, KEY_JOY_RIGHT, a));                  // list: page switching
+  CHECK(!lightsOnKey(L, KEY_A, a));
+  CHECK(lightsOnKey(L, KEY_JOY_PRESS, a) && L.editing && L.field == LF_POWER);
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.field == LF_BRIGHTNESS);
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.field == LF_COLOUR);
+  CHECK(lightsOnKey(L, KEY_JOY_DOWN, a) && L.field == LF_COLOUR);
+  CHECK(lightsOnKey(L, KEY_JOY_LEFT, a) && L.editing);       // editing: left/right consumed
+  CHECK(lightsOnKey(L, KEY_JOY_PRESS, a) && !L.editing);
+  L.editing = true;
+  CHECK(lightsOnKey(L, KEY_B, a) && !L.editing);             // B also goes back
+  CHECK(L.uiDirty);
+}
+
+static void test_lights_keys_actions() {
+  LightsState L{};
+  LightState& s = L.l[1];
+  s.known = s.available = true; s.on = true; s.brightness = 128; s.mode = LM_CT; s.kelvin = 2700;
+  L.sel = 1; L.editing = true; L.field = LF_POWER;
+  LightAction a;
+  lightsOnKey(L, KEY_JOY_RIGHT, a);
+  CHECK(a.kind == LA_TOGGLE && a.light == 1);
+  L.field = LF_BRIGHTNESS;
+  lightsOnKey(L, KEY_JOY_RIGHT, a);
+  CHECK(a.kind == LA_BRIGHTNESS && a.pct == 60);
+  lightsOnKey(L, KEY_JOY_LEFT, a);
+  CHECK(a.kind == LA_BRIGHTNESS && a.pct == 40);
+  L.field = LF_COLOUR;
+  lightsOnKey(L, KEY_JOY_RIGHT, a);
+  CHECK(a.kind == LA_COLOUR && a.preset == 1);               // warm white -> next
+  lightsOnKey(L, KEY_JOY_LEFT, a);
+  CHECK(a.kind == LA_COLOUR && a.preset == COLOUR_PRESET_COUNT - 1);  // wraps
+  s.available = false;
+  lightsOnKey(L, KEY_JOY_RIGHT, a);
+  CHECK(a.kind == LA_NONE);                                  // unavailable: no calls
+}
+
+static void test_light_call_json() {
+  char buf[256];
+  JsonDocument d;
+  LightAction a{LA_TOGGLE, 0, 0, 0};
+  CHECK(lightBuildCall(buf, sizeof(buf), 42, a));
+  deserializeJson(d, buf);
+  CHECK(d["id"] == 42 && d["type"] == "call_service" && d["domain"] == "light" && d["service"] == "toggle");
+  CHECK(d["target"]["entity_id"] == "light.philips_lamp");
+  a = {LA_BRIGHTNESS, 2, 60, 0};
+  lightBuildCall(buf, sizeof(buf), 43, a); deserializeJson(d, buf);
+  CHECK(d["service"] == "turn_on" && d["service_data"]["brightness_pct"] == 60);
+  CHECK(d["target"]["entity_id"] == "light.extended_color_light_8");
+  a = {LA_COLOUR, 1, 0, 0};  // Warm white
+  lightBuildCall(buf, sizeof(buf), 44, a); deserializeJson(d, buf);
+  CHECK(d["service_data"]["color_temp_kelvin"] == 2700 && d["service_data"]["hs_color"].isNull());
+  int blue = -1;
+  for (int i = 0; i < COLOUR_PRESET_COUNT; i++) if (!strcmp(COLOUR_PRESETS[i].name, "Blue")) blue = i;
+  a = {LA_COLOUR, 1, 0, (uint8_t)blue};
+  lightBuildCall(buf, sizeof(buf), 45, a); deserializeJson(d, buf);
+  CHECK(d["service_data"]["hs_color"][0] == 230 && d["service_data"]["hs_color"][1] == 100);
+  CHECK(!lightBuildCall(buf, 20, 46, a));                    // too small
+}
+
+static void test_light_optimistic_update() {
+  LightsState L{};
+  LightState& s = L.l[0];
+  s.known = s.available = true; s.on = false; s.brightness = 0;
+  lightsApplyAction(L, {LA_BRIGHTNESS, 0, 60, 0});
+  CHECK(s.on && lightPct(s.brightness) == 60 && (L.dirty & 1));
+  lightsApplyAction(L, {LA_TOGGLE, 0, 0, 0});
+  CHECK(!s.on);
+  lightsApplyAction(L, {LA_COLOUR, 0, 0, 0});               // colour change turns it on
+  CHECK(s.on && s.mode == LM_CT && s.kelvin == COLOUR_PRESETS[0].kelvin);
+}
+
+static void test_light_swatch() {
+  LightState s{}; s.known = s.available = s.on = true;
+  s.mode = LM_HS; s.hue = 0; s.sat = 100;
+  CHECK(lightSwatch565(s) == 0xF800);                        // pure red
+  s.hue = 120;
+  CHECK(lightSwatch565(s) == 0x07E0);
+  s.on = false;
+  CHECK(lightSwatch565(s) == 0);                             // 0 = draw as off
 }
 
 int main() {
@@ -602,6 +762,15 @@ int main() {
   test_climate_format();
   test_subscribe_lists_all_entities();
   test_routing_reaches_climate();
+  test_lights_defs();
+  test_lights_state_from_events();
+  test_brightness_pct_and_steps();
+  test_colour_preset_match();
+  test_lights_keys_navigation();
+  test_lights_keys_actions();
+  test_light_call_json();
+  test_light_optimistic_update();
+  test_light_swatch();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

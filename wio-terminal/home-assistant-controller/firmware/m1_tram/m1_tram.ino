@@ -1,16 +1,18 @@
-// Wio Terminal Home Assistant controller: Tram and Climate pages.
+// Wio Terminal Home Assistant controller: Tram, Climate and Lights pages.
 // See README.md. Secrets in secrets.h (copy secrets.h.example).
 #include <TFT_eSPI.h>
 #include "net.h"
 #include "ha.h"
 #include "page_tram.h"
 #include "page_climate.h"
+#include "page_lights.h"
 #include "ui.h"
 #include "wdt.h"
 
 static TFT_eSPI tft;
 static TramState tram{};
 static ClimateState climate{};
+static LightsState lights{};
 
 static void drawTramPage(bool full) {
   uint32_t t0 = millis();
@@ -23,9 +25,24 @@ static void drawClimatePage(bool full) {
   climateDraw(tft, climate, nowUtc(), haStatus(), full);
 }
 
+static void drawLightsPage(bool full) {
+  lightsDraw(tft, lights, nowUtc(), haStatus(), full);
+}
+
+static bool lightsKey(Key k) {
+  LightAction a;
+  if (!lightsOnKey(lights, k, a)) return false;
+  if (a.kind != LA_NONE) {
+    if (haCallLight(a)) lightsApplyAction(lights, a);
+    else Serial.println("lights: not connected, nothing sent");
+  }
+  return true;
+}
+
 static const Page PAGES[] = {
   {"Tram", drawTramPage, nullptr},
   {"Climate", drawClimatePage, nullptr},
+  {"Lights", drawLightsPage, lightsKey},
 };
 
 void setup() {
@@ -43,7 +60,7 @@ void setup() {
   uiInit(PAGES, sizeof(PAGES) / sizeof(PAGES[0]));
   uiPoll();  // first paint before the (blocking) WiFi scan
   netInit();
-  haInit(&tram, &climate);
+  haInit(&tram, &climate, &lights);
 }
 
 // Serial 's': raw RGB565 screenshot ("SHOT\n" + 320*240*2 bytes, big-endian rows).
@@ -76,6 +93,10 @@ void loop() {
       Serial.print(" ha "); Serial.print(haStatus());
       Serial.print(" early warnings "); Serial.println(WDT_CRUMBS[2]);
     }
+    // Simulated keys: U/D/L/R/P joystick, B button B (L/R change lamps when editing).
+    static const char KEYS[] = "BUDLRP";
+    static const Key KEYV[] = {KEY_B, KEY_JOY_UP, KEY_JOY_DOWN, KEY_JOY_LEFT, KEY_JOY_RIGHT, KEY_JOY_PRESS};
+    if (const char* k = c ? strchr(KEYS, c) : nullptr) uiInjectKey(KEYV[k - KEYS]);
     if (c == 'w') { Serial.println("hanging to test the watchdog"); while (true) {} }
   }
 }

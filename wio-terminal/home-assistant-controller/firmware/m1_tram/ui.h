@@ -7,7 +7,7 @@
 struct Page {
   const char* name;
   void (*draw)(bool full);
-  void (*key)(Key k);  // keys the page handles itself; may be null
+  bool (*key)(Key k);  // keys the page handles itself (true = used, before page switching); may be null
 };
 
 static const uint8_t KEY_PINS[] = {WIO_KEY_A, WIO_KEY_B, WIO_KEY_C, WIO_5S_UP, WIO_5S_DOWN,
@@ -37,16 +37,17 @@ static void uiKey(Key k) {
     case SLEEP_TURN_ON: backlightSet(BACKLIGHT_DEFAULT); uiNeedFull = true; return;
     case SLEEP_PASS: break;
   }
+  if (uiPages[uiPage].key && uiPages[uiPage].key(k)) return;
   if (uiPageCount > 1 && (k == KEY_JOY_LEFT || k == KEY_JOY_RIGHT)) {
     uiPage = (uiPage + (k == KEY_JOY_RIGHT ? 1 : uiPageCount - 1)) % uiPageCount;
     uiNeedFull = true;
-    return;
   }
-  if (uiPages[uiPage].key) uiPages[uiPage].key(k);
 }
 
-// Serial 'p' in the sketch: next page, as the joystick right does.
-inline void uiNextPage() { uiKey(KEY_JOY_RIGHT); }
+// Serial commands in the sketch: next page (even while a page holds the
+// joystick), and simulated key presses.
+inline void uiNextPage() { uiPage = (uiPage + 1) % uiPageCount; uiNeedFull = true; }
+inline void uiInjectKey(Key k) { uiKey(k); }
 
 // Debounced press edges -> uiKey(); redraws the current page unless dark.
 inline void uiPoll() {

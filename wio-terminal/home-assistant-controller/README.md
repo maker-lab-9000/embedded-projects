@@ -27,8 +27,23 @@ Control Panel dashboard's colour rules:
 
 ![Climate page](docs/images/climate-page.png)
 
-Planned pages: Lights (brightness and color), Plugs, Status. Graphs are
-deferred.
+**Lights**: Philips lamp (`light.philips_lamp`), Tripod lamp
+(`light.extended_color_light_10`) and Moon lamp (`light.extended_color_light_8`),
+controlled directly with `light.toggle` / `light.turn_on` (the dashboard's
+brightness slider helpers don't follow these changes).
+
+- Joystick up/down picks a lamp; press opens its settings.
+- In the settings, up/down picks Power, Brightness or Colour and left/right
+  changes it: toggle, 10 % steps (down to 1 %), or the next colour preset
+  (warm white, neutral, cool white, red, orange, yellow, green, cyan, blue,
+  purple, pink). Press or B goes back. Left/right switch pages only from
+  the lamp list.
+- The screen updates on the key press; Home Assistant's state push then
+  confirms or corrects it. Nothing is sent while disconnected.
+
+![Lights page](docs/images/lights-page.png) ![Lamp settings](docs/images/lights-settings.png)
+
+Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
 
@@ -59,7 +74,8 @@ test/run.sh
 ## How it works
 
 - One websocket to `ws://<HA_HOST>:8123/api/websocket`: `subscribe_entities`
-  for the tram and climate entities (live pushes), `history/history_during_period`
+  for the tram, climate and light entities (live pushes),
+  `call_service` for the lamps, `history/history_during_period`
   for the chart every 10 min, a ping every 30 s.
 - If the token is rejected, the device stops and shows "Token rejected" —
   no retries, because Home Assistant bans IPs after repeated failed logins.
@@ -80,6 +96,8 @@ The last step reached before a reset is kept in backup RAM and printed at boot.
 
 - `r`: drop and reconnect the Home Assistant session (tests recovery).
 - `p`: next page (like joystick right).
+- `U` `D` `L` `R` `P`: joystick up/down/left/right/press, `B`: button B.
+  On the Lights settings, `L`/`R` switch real lamps.
 - `s`: dump a screenshot: `SHOT\n` followed by 320×240 RGB565 pixels, big-endian.
 - `c`: uptime, HA status, watchdog early-warning count.
 - `w`: hang on purpose to test the watchdog.
@@ -102,6 +120,7 @@ or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 | `header.h` | shared header: battery, title, HA status, clock; colours |
 | `page_tram.h`, `chart.h` | tram page drawing, chart geometry (pure) |
 | `page_climate.h` | climate page drawing |
+| `lights_model.h`, `page_lights.h` | lamp state, keys, service calls (pure); lights page drawing |
 | `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
 | `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
 | `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |
