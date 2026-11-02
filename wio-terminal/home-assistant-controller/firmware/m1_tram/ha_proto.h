@@ -8,6 +8,7 @@
 #include "lights_model.h"
 #include "heating_model.h"
 #include "power_model.h"
+#include "homelab_model.h"
 #include "timeutil.h"
 
 enum HaAction : uint8_t { HA_ACT_NONE, HA_ACT_SEND_AUTH, HA_ACT_SUBSCRIBE, HA_ACT_REJECTED };
@@ -16,6 +17,7 @@ struct HaProto {
   uint32_t subId = 1;        // id of the subscribe_entities request
   uint32_t histPending = 0;  // id of the outstanding history request, 0 = none
   uint32_t pingPending = 0;  // id of the outstanding ping, 0 = none
+  uint32_t hlPending = 0;    // id of the outstanding homelab history piece, 0 = none
   bool authed = false;
 };
 
@@ -53,7 +55,7 @@ inline void haBuildFilter(JsonDocument& f) {
   chg["-"] = true;
 }
 
-inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, LightsState& L, HeatingState& H, PowerState& P, JsonVariantConst msg) {
+inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, LightsState& L, HeatingState& H, PowerState& P, HomelabState& HL, JsonVariantConst msg) {
   const char* type = msg["type"] | "";
   uint32_t id = msg["id"] | 0u;
   if (!strcmp(type, "auth_required")) return HA_ACT_SEND_AUTH;
@@ -65,9 +67,14 @@ inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, Light
     lightsApplyEvent(L, msg["event"]);
     heatingApplyEvent(H, msg["event"]);
     powerApplyEvent(P, msg["event"]);
+    homelabApplyEvent(HL, msg["event"]);
   } else if (!strcmp(type, "result") && id != 0 && id == p.histPending) {
     p.histPending = 0;
     if (msg["success"] | false) tramApplyHistory(s, msg["result"]);
+  } else if (!strcmp(type, "result") && id != 0 && id == p.hlPending) {
+    p.hlPending = 0;
+    if (msg["success"] | false) homelabApplyHistory(HL, msg["result"]);
+    hlFillAdvance(HL);  // a failed piece is skipped
   } else if (!strcmp(type, "pong") && id == p.pingPending) {
     p.pingPending = 0;
   }
@@ -94,6 +101,8 @@ inline bool haBuildSubscribe(char* buf, size_t n) {
   for (const ThermoDef& t : THERMOS) addId(t.id);
   addId(POWER_TOTAL_ID);
   for (const PowerDevice& d : POWER_DEVICES) addId(d.id);
+  addId(HL_CPU_ID); addId(HL_RAM_ID);
+  for (const HlTemp& t : HL_TEMPS) addId(t.id);
   add("]}");
   return o < n;
 }
@@ -118,4 +127,18 @@ inline void formatIsoUtc(uint32_t epochUtc, char* buf, size_t n) {
   uint32_t r = epochUtc % 86400;
   snprintf(buf, n, "%04d-%02u-%02uT%02u:%02u:%02uZ", (int)y, (unsigned)m, (unsigned)d,
            (unsigned)(r / 3600), (unsigned)(r / 60 % 60), (unsigned)(r % 60));
+}
+
+// The next homelab history piece as a request; false when all are loaded or `n` is too small.
+inline bool hlBuildRequest(char* buf, size_t n, uint32_t id, const HomelabState& H) {
+  uint8_t i; uint32_t a, b;
+  if (!hlNextRequest(H, i, a, b)) return false;
+  char start[24], end[24];
+  formatIsoUtc(a, start, sizeof(start));
+  formatIsoUtc(b, end, sizeof(end));
+  int w = snprintf(buf, n,
+                   "{\"id\":%lu,\"type\":\"history/history_during_period\",\"start_time\":\"%s\","
+                   "\"end_time\":\"%s\",\"entity_ids\":[\"%s\"],\"minimal_response\":true,\"no_attributes\":true}",
+                   (unsigned long)id, start, end, HL_TEMPS[i].id);
+  return w > 0 && (size_t)w < n;
 }

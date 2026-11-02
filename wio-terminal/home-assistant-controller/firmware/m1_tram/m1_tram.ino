@@ -1,4 +1,4 @@
-// Wio Terminal Home Assistant controller: Tram, Climate, Lights, Heating and Power pages.
+// Wio Terminal Home Assistant controller: Tram, Climate, Lights, Heating, Power and Homelab pages.
 // See README.md. Secrets in secrets.h (copy secrets.h.example).
 #include <TFT_eSPI.h>
 #include "net.h"
@@ -8,6 +8,7 @@
 #include "page_lights.h"
 #include "page_heating.h"
 #include "page_power.h"
+#include "page_homelab.h"
 #include "ui.h"
 #include "wdt.h"
 
@@ -17,6 +18,7 @@ static ClimateState climate{};
 static LightsState lights{};
 static HeatingState heating{};
 static PowerState power{};
+static HomelabState homelab{};
 
 static void drawTramPage(bool full) {
   uint32_t t0 = millis();
@@ -64,12 +66,17 @@ static void drawPowerPage(bool full) {
   powerDraw(tft, power, nowUtc(), haStatus(), full);
 }
 
+static void drawHomelabPage(bool full) {
+  homelabDraw(tft, homelab, nowUtc(), haStatus(), full);
+}
+
 static const Page PAGES[] = {
   {"Tram", drawTramPage, nullptr},
   {"Climate", drawClimatePage, nullptr},
   {"Lights", drawLightsPage, lightsKey},
   {"Heating", drawHeatingPage, heatingKey},
   {"Power", drawPowerPage, nullptr},
+  {"Homelab", drawHomelabPage, nullptr},
 };
 
 void setup() {
@@ -87,7 +94,7 @@ void setup() {
   uiInit(PAGES, sizeof(PAGES) / sizeof(PAGES[0]));
   uiPoll();  // first paint before the (blocking) WiFi scan
   netInit();
-  haInit(&tram, &climate, &lights, &heating, &power);
+  haInit(&tram, &climate, &lights, &heating, &power, &homelab);
 }
 
 // Serial 's': raw RGB565 screenshot ("SHOT\n" + 320*240*2 bytes, big-endian rows).

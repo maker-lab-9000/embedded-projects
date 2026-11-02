@@ -62,6 +62,18 @@ greyed out.
 
 ![Power page](docs/images/power-page.png)
 
+**Homelab**: Proxmox host CPU (`sensor.proxmox_cpu_usage`) and RAM
+(`sensor.proxmox_ram_usage`), bars blue / amber from 75 % / red from 90 % as
+on the dashboard; then the "Temperatures, last 24 hours" chart: CPU, GPU,
+NVMe, BigData, JellyMedia (`sensor.*_temp`) in the card's colours, 15-minute
+means, with the current values below. These sensors have no long-term
+statistics and a day of raw history is ~100 KB for CPU alone (the websocket
+buffer is 24 KB), so after each connect the Wio loads the day in 60 pieces
+(2 h × 5 sensors, newest first, about a minute in all) and averages them
+itself; live changes extend the chart after that.
+
+![Homelab page](docs/images/homelab-page.png)
+
 Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
@@ -142,6 +154,7 @@ or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 | `lights_model.h`, `page_lights.h` | lamp state, keys, service calls (pure); lights page drawing |
 | `heating_model.h`, `page_heating.h` | thermostat state, keys, debounced target (pure); heating page drawing |
 | `power_model.h`, `page_power.h` | plug power readings, bar share (pure); power page drawing |
+| `homelab_model.h`, `page_homelab.h` | host usage, 24 h temperature buckets and history loading (pure); homelab page drawing |
 | `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
 | `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
 | `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |

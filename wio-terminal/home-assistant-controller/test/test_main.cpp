@@ -232,10 +232,11 @@ static ClimateState g_climate{};  // tram tests don't look at these
 static LightsState g_lights{};
 static HeatingState g_heating{};
 static PowerState g_power{};
+static HomelabState g_homelab{};
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -390,7 +391,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -578,8 +579,178 @@ static void test_power_share() {
   CHECK(powerShare({-5, true}, {100, true}) == 0);
 }
 
+static void test_homelab_defs() {
+  CHECK_STR(HL_CPU_ID, "sensor.proxmox_cpu_usage");
+  CHECK_STR(HL_RAM_ID, "sensor.proxmox_ram_usage");
+  CHECK(HL_TEMP_COUNT == 5);
+  const char* ids[] = {"sensor.cpu_temp", "sensor.gpu_temp", "sensor.nvme_temp", "sensor.bigdata_temp", "sensor.jellymedia_temp"};
+  const char* names[] = {"CPU", "GPU", "NVMe", "BigData", "JellyMedia"};
+  const char* cols[] = {"#e07a2e", "#c9a227", "#3a6fd8", "#2f9e8f", "#8a94a3"};
+  for (int i = 0; i < 5; i++) {
+    CHECK_STR(HL_TEMPS[i].id, ids[i]); CHECK_STR(HL_TEMPS[i].name, names[i]); CHECK_STR(HL_TEMPS[i].colour, cols[i]);
+  }
+}
+
+static void test_homelab_usage_colour() {
+  CHECK(hlUsage565({10, true}) == hexTo565("#3a6fd8"));
+  CHECK(hlUsage565({74.9f, true}) == hexTo565("#3a6fd8"));
+  CHECK(hlUsage565({75, true}) == hexTo565("#c98a0b"));
+  CHECK(hlUsage565({89.9f, true}) == hexTo565("#c98a0b"));
+  CHECK(hlUsage565({90, true}) == hexTo565("#d1453b"));
+  CHECK(hlUsage565({90, false}) == 0);
+}
+
+static const uint32_t HL_NOW = 1793637000u;  // multiple of 900? no: 1793637000 % 900 = 0
+static void hlApply(HomelabState& H, const char* json) {
+  JsonDocument d;
+  CHECK(deserializeJson(d, json) == DeserializationError::Ok);
+  homelabApplyEvent(H, d.as<JsonVariantConst>());
+}
+
+static void test_homelab_live_values() {
+  HomelabState H{};
+  hlApply(H, R"({"a":{"sensor.proxmox_cpu_usage":{"s":"13.3","lc":1793637000},"sensor.proxmox_ram_usage":{"s":"80.0","lc":1793637000},
+    "sensor.nvme_temp":{"s":"39.9","lc":1793637000},"sensor.babyroom":{"s":"1"}}})");
+  CHECK(H.cpu.known && H.cpu.v == 13.3f);
+  CHECK(H.ram.known && H.ram.v == 80.0f);
+  CHECK(H.temp[2].known && H.temp[2].v == 39.9f);
+  CHECK(!H.temp[0].known);
+  CHECK(H.dirty == (HL_DIRTY_CPU | HL_DIRTY_RAM | HL_DIRTY_TEMPS));
+  CHECK(H.s[2].n[(HL_NOW / HL_BUCKET_S) % HL_BUCKETS] == 0);  // no samples before the backfill starts
+}
+
+static void test_homelab_live_samples_after_fill() {
+  HomelabState H{};
+  hlBeginFill(H, HL_NOW);
+  CHECK(H.dirty & HL_DIRTY_CHART);
+  H.dirty = 0;
+  hlApply(H, R"({"c":{"sensor.cpu_temp":{"+":{"s":"60","lc":1793637100.5}}}})");
+  hlApply(H, R"({"c":{"sensor.cpu_temp":{"+":{"s":"62","lu":1793637200.5}}}})");
+  hlApply(H, R"({"c":{"sensor.cpu_temp":{"+":{"s":"99","lc":1793636000}}}})");  // older than the fill: history has it
+  uint32_t slot = (HL_NOW / HL_BUCKET_S) % HL_BUCKETS;
+  CHECK(H.s[0].n[slot] == 2 && H.s[0].sum[slot] == 122.0f);
+  CHECK(H.temp[0].known && H.temp[0].v == 99.0f);  // the current value still updates
+  CHECK(H.dirty & HL_DIRTY_CHART);
+}
+
+static void test_homelab_buckets_advance() {
+  HomelabState H{};
+  hlBeginFill(H, HL_NOW);
+  hlAddSample(H, 1, HL_NOW - 10, 50);                 // previous bucket
+  CHECK(H.s[1].n[(HL_NOW / HL_BUCKET_S - 1) % HL_BUCKETS] == 1);
+  hlAddSample(H, 1, HL_NOW - 86400 - 1000, 40);       // older than 24 h: dropped
+  int total = 0; for (int k = 0; k < HL_BUCKETS; k++) total += H.s[1].n[k];
+  CHECK(total == 1);
+  hlAdvance(H, HL_NOW / HL_BUCKET_S + HL_BUCKETS - 1);  // the old bucket's slot is reused: cleared
+  CHECK(H.s[1].n[(HL_NOW / HL_BUCKET_S - 1) % HL_BUCKETS] == 0);
+  hlAdvance(H, HL_NOW / HL_BUCKET_S);                 // never goes back
+  CHECK(H.head == HL_NOW / HL_BUCKET_S + HL_BUCKETS - 1);
+}
+
+static void test_homelab_fill_requests() {
+  HomelabState H{};
+  uint8_t i; uint32_t a, b;
+  CHECK(!hlNextRequest(H, i, a, b));  // not started
+  hlBeginFill(H, HL_NOW);
+  CHECK(hlNextRequest(H, i, a, b) && i == 0 && b == HL_NOW && a == HL_NOW - HL_WINDOW_S);
+  for (int k = 0; k < 4; k++) hlFillAdvance(H);
+  CHECK(hlNextRequest(H, i, a, b) && i == 4 && b == HL_NOW);
+  hlFillAdvance(H);
+  CHECK(hlNextRequest(H, i, a, b) && i == 0 && b == HL_NOW - HL_WINDOW_S && a == HL_NOW - 2 * HL_WINDOW_S);
+  while (H.fillNext < HL_REQUESTS) hlFillAdvance(H);
+  CHECK(!hlNextRequest(H, i, a, b));
+  CHECK(HL_REQUESTS * HL_WINDOW_S / HL_TEMP_COUNT == 86400);
+  hlFillAdvance(H);
+  CHECK(H.fillNext == HL_REQUESTS);  // stays done
+}
+
+static void test_homelab_apply_history() {
+  HomelabState H{};
+  hlBeginFill(H, HL_NOW);
+  H.dirty = 0;
+  JsonDocument d;
+  deserializeJson(d, R"({"sensor.cpu_temp":[{"s":"57.1","lu":1793636100.0},{"s":"unavailable","lu":1793636150.0},
+    {"s":"59","lu":1793636160.2},{"s":"70","lu":1793637000.0}]})");
+  homelabApplyHistory(H, d.as<JsonVariantConst>());
+  uint32_t slot = (HL_NOW / HL_BUCKET_S - 1) % HL_BUCKETS;
+  CHECK(H.s[0].n[slot] == 2);
+  CHECK(H.s[0].sum[slot] > 116.09f && H.s[0].sum[slot] < 116.11f);
+  CHECK(H.s[0].n[(HL_NOW / HL_BUCKET_S) % HL_BUCKETS] == 0);  // at or after fillTo: live updates own it
+  CHECK(H.dirty & HL_DIRTY_CHART);
+}
+
+static void test_homelab_points_carry_forward() {
+  HomelabState H{};
+  hlBeginFill(H, HL_NOW);
+  uint32_t b = HL_NOW / HL_BUCKET_S;
+  hlAddSample(H, 3, (b - 3) * HL_BUCKET_S + 5, 35);
+  hlAddSample(H, 3, (b - 1) * HL_BUCKET_S + 5, 36);
+  hlAddSample(H, 3, (b - 1) * HL_BUCKET_S + 6, 38);
+  float pts[HL_BUCKETS];
+  CHECK(hlPoints(H, 3, pts) == 4);  // b-3 .. b known (carried), the rest before it unknown
+  CHECK(isnan(pts[HL_BUCKETS - 5]));
+  CHECK(pts[HL_BUCKETS - 4] == 35 && pts[HL_BUCKETS - 3] == 35);
+  CHECK(pts[HL_BUCKETS - 2] == 37 && pts[HL_BUCKETS - 1] == 37);
+}
+
+static void test_homelab_scale() {
+  HomelabState H{};
+  ChartScale c = hlScale(H);
+  CHECK(c.yMin == 15 && c.yMax == 65);  // no data
+  hlBeginFill(H, HL_NOW);
+  hlAddSample(H, 0, HL_NOW + 1, 68.0f);
+  hlAddSample(H, 4, HL_NOW + 1, 20.0f);
+  c = hlScale(H);
+  CHECK(c.yMin == 15 && c.yMax == 75);
+  hlAddSample(H, 4, HL_NOW + 2, 10.0f);  // mean 15 for JellyMedia: still above the floor
+  hlAddSample(H, 1, HL_NOW + 1, 4.0f);
+  c = hlScale(H);
+  CHECK(c.yMin == 0 && c.yMax == 75);    // below 15: floor moves down in steps of 5
+}
+
+static void test_homelab_request_json() {
+  HomelabState H{};
+  hlBeginFill(H, 1793570400u);  // 2026-11-01T22:00:00Z
+  char buf[300];
+  CHECK(hlBuildRequest(buf, sizeof(buf), 42, H));
+  JsonDocument d;
+  CHECK(deserializeJson(d, buf) == DeserializationError::Ok);
+  CHECK(d["id"] == 42);
+  CHECK_STR(d["type"] | "", "history/history_during_period");
+  CHECK_STR(d["entity_ids"][0] | "", "sensor.cpu_temp");
+  CHECK_STR(d["start_time"] | "", "2026-11-01T20:00:00Z");
+  CHECK_STR(d["end_time"] | "", "2026-11-01T22:00:00Z");
+  CHECK(d["minimal_response"] == true && d["no_attributes"] == true);
+  while (H.fillNext < HL_REQUESTS) hlFillAdvance(H);
+  CHECK(!hlBuildRequest(buf, sizeof(buf), 43, H));
+  char tiny[20];
+  HomelabState H2{}; hlBeginFill(H2, 1793570400u);
+  CHECK(!hlBuildRequest(tiny, sizeof(tiny), 1, H2));
+}
+
+static void test_routing_homelab_history() {
+  HaProto p; TramState s{}; ClimateState c{}; LightsState L{}; HeatingState Ht{}; PowerState P{}; HomelabState H{};
+  hlBeginFill(H, HL_NOW);
+  p.hlPending = 9;
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  deserializeJson(d, R"({"id":9,"type":"result","success":true,"result":{"sensor.cpu_temp":[{"s":"60","lu":1793630000.0}]}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  CHECK(p.hlPending == 0 && H.fillNext == 1);
+  CHECK(H.s[0].n[(1793630000u / HL_BUCKET_S) % HL_BUCKETS] == 1);
+  p.hlPending = 10;
+  deserializeJson(d, R"({"id":10,"type":"result","success":false,"error":{"code":"x"}})", DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  CHECK(p.hlPending == 0 && H.fillNext == 2);  // a failed piece is skipped
+  deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.proxmox_ram_usage":{"+":{"s":"81.5","lc":1.0}}}}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  CHECK(H.ram.known && H.ram.v == 81.5f);
+}
+
 static void test_subscribe_lists_all_entities() {
-  char buf[1024];
+  char buf[1400];
   CHECK(haBuildSubscribe(buf, sizeof(buf)));
   CHECK(strstr(buf, "\"type\":\"subscribe_entities\"") != nullptr);
   CHECK(strstr(buf, "\"sensor.kuckhoffstr_berlin\"") != nullptr);
@@ -591,7 +762,12 @@ static void test_subscribe_lists_all_entities() {
   CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
   JsonDocument d;
   CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
-  CHECK(d["entity_ids"].size() == 26);
+  CHECK(d["entity_ids"].size() == 33);
+  CHECK(strstr(buf, "\"sensor.proxmox_cpu_usage\"") && strstr(buf, "\"sensor.proxmox_ram_usage\""));
+  for (const HlTemp& t : HL_TEMPS) {
+    std::string q = std::string("\"") + t.id + "\"";
+    CHECK(strstr(buf, q.c_str()) != nullptr);
+  }
   CHECK(strstr(buf, "\"sensor.home_plugs_total_power\"") != nullptr);
   for (const PowerDevice& pd : POWER_DEVICES) {
     std::string q = std::string("\"") + pd.id + "\"";
@@ -613,7 +789,7 @@ static void test_routing_reaches_climate() {
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
                   DeserializationOption::Filter(f));
   LightsState L{}; HeatingState H{};
-  haHandleMessage(p, s, c, L, H, g_power, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
   CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
 }
 
@@ -623,7 +799,7 @@ static void test_routing_reaches_power() {
   JsonDocument d;
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.home_plugs_total_power":{"+":{"s":"98.5","lc":1.0}}}}})",
                   DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, L, H, P, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, H, P, g_homelab, d.as<JsonVariantConst>());
   CHECK(P.total.known && P.total.v == 98.5f);
 }
 
@@ -635,7 +811,7 @@ static void applyLights(LightsState& L, const char* json) {
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{};
   HeatingState H{};
-  haHandleMessage(p, t, c, L, H, g_power, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
 }
 
 static void test_lights_defs() {
@@ -789,7 +965,7 @@ static void applyHeating(HeatingState& H, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{}; LightsState L{};
-  haHandleMessage(p, t, c, L, H, g_power, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
 }
 
 static void test_heating_defs() {
@@ -970,6 +1146,17 @@ int main() {
   test_power_format();
   test_power_share();
   test_routing_reaches_power();
+  test_homelab_defs();
+  test_homelab_usage_colour();
+  test_homelab_live_values();
+  test_homelab_live_samples_after_fill();
+  test_homelab_buckets_advance();
+  test_homelab_fill_requests();
+  test_homelab_apply_history();
+  test_homelab_points_carry_forward();
+  test_homelab_scale();
+  test_homelab_request_json();
+  test_routing_homelab_history();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }
