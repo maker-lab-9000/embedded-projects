@@ -228,10 +228,11 @@ static void test_hex_to_565() {
 
 #include "ha_proto.h"
 
+static ClimateState g_climate{};  // tram tests don't look at it
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -386,7 +387,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -446,6 +447,111 @@ static void test_battery_color() {
   CHECK(batteryColor(14) == 0xF800);  // red
 }
 
+#include "climate_model.h"
+
+static void test_temp_colour() {
+  // Dashboard rule: >26 red, >=20 yellow, else blue; unknown grey.
+  CHECK(tempColour({20.3f, true}) == CL_YELLOW);
+  CHECK(tempColour({20.0f, true}) == CL_YELLOW);
+  CHECK(tempColour({19.7f, true}) == CL_BLUE);
+  CHECK(tempColour({26.0f, true}) == CL_YELLOW);
+  CHECK(tempColour({26.1f, true}) == CL_RED);
+  CHECK(tempColour({30.0f, false}) == CL_GREY);
+}
+
+static void test_humidity_colour() {
+  // Dashboard rule: >75 red, >65 yellow, else green.
+  CHECK(humColour({65.71f, true}) == CL_YELLOW);
+  CHECK(humColour({65.0f, true}) == CL_GREEN);
+  CHECK(humColour({63.0f, true}) == CL_GREEN);
+  CHECK(humColour({75.0f, true}) == CL_YELLOW);
+  CHECK(humColour({75.5f, true}) == CL_RED);
+  CHECK(humColour({0, false}) == CL_GREY);
+}
+
+static void test_pm_colour() {
+  // Under the card's limit green, up to twice the limit yellow, above red.
+  CHECK(pmColour({9.9f, true}, 10) == CL_GREEN);
+  CHECK(pmColour({14.0f, true}, 10) == CL_YELLOW);
+  CHECK(pmColour({20.0f, true}, 10) == CL_YELLOW);
+  CHECK(pmColour({20.1f, true}, 10) == CL_RED);
+  CHECK(pmColour({16.1f, true}, 20) == CL_GREEN);
+  CHECK(pmColour({0, false}, 20) == CL_GREY);
+}
+
+static void test_rooms_map_to_sensors() {
+  CHECK_STR(CLIMATE_ROOMS[0].name, "Bedroom");
+  CHECK_STR(CLIMATE_ROOMS[0].temp, "sensor.multi_sensor_bedzimmer");
+  CHECK_STR(CLIMATE_ROOMS[0].hum, "sensor.multi_sensor_bedzimmer_2");
+  CHECK_STR(CLIMATE_ROOMS[1].name, "Theo's room");
+  CHECK_STR(CLIMATE_ROOMS[1].temp, "sensor.babyroom");
+  CHECK_STR(CLIMATE_ROOMS[1].hum, "sensor.babyroom_2");
+  CHECK_STR(CLIMATE_ROOMS[2].name, "Bathroom");
+  CHECK_STR(CLIMATE_ROOMS[2].temp, "sensor.temperature_9");
+  CHECK_STR(CLIMATE_ROOMS[2].hum, "sensor.humidity_10");
+  CHECK_STR(CLIMATE_ROOMS[3].name, "Living room");
+  CHECK_STR(CLIMATE_ROOMS[3].temp, "sensor.living_room");
+  CHECK_STR(CLIMATE_ROOMS[3].hum, "sensor.living_room_2");
+  CHECK_STR(CLIMATE_PM[0].id, "sensor.nova_pm2_5");
+  CHECK(CLIMATE_PM[0].limit == 10);
+  CHECK_STR(CLIMATE_PM[1].id, "sensor.nova_pm10");
+  CHECK(CLIMATE_PM[1].limit == 20);
+}
+
+static void test_climate_event() {
+  ClimateState c{};
+  JsonDocument d;
+  deserializeJson(d, R"({"a":{"sensor.babyroom":{"s":"19.75"},"sensor.babyroom_2":{"s":"63.76"},
+    "sensor.nova_pm10":{"s":"16.1"},"sensor.kuckhoffstr_berlin":{"s":"x"}}})");
+  climateApplyEvent(c, d.as<JsonVariantConst>());
+  CHECK(c.temp[1].known && c.temp[1].v == 19.75f);
+  CHECK(c.hum[1].known && c.hum[1].v == 63.76f);
+  CHECK(c.pm[1].known && c.pm[1].v == 16.1f);
+  CHECK(!c.temp[0].known && !c.pm[0].known);
+  CHECK(c.dirty == (CLIMATE_DIRTY_ROOM(1) | CLIMATE_DIRTY_PM(1)));
+  c.dirty = 0;
+  deserializeJson(d, R"({"c":{"sensor.babyroom":{"+":{"s":"unavailable"}},"sensor.living_room_2":{"+":{"lc":1.0}}}})");
+  climateApplyEvent(c, d.as<JsonVariantConst>());
+  CHECK(!c.temp[1].known);                 // unavailable -> grey "--"
+  CHECK(!c.hum[3].known);                  // change without a state: ignored
+  CHECK(c.dirty == CLIMATE_DIRTY_ROOM(1));
+}
+
+static void test_climate_format() {
+  char b[12];
+  climateFormat({20.88f, true}, 1, b, sizeof(b)); CHECK_STR(b, "20.9");
+  climateFormat({65.71f, true}, 0, b, sizeof(b)); CHECK_STR(b, "66");
+  climateFormat({0, false}, 1, b, sizeof(b)); CHECK_STR(b, "--");
+}
+
+static void test_subscribe_lists_all_entities() {
+  char buf[700];
+  CHECK(haBuildSubscribe(buf, sizeof(buf)));
+  CHECK(strstr(buf, "\"type\":\"subscribe_entities\"") != nullptr);
+  CHECK(strstr(buf, "\"sensor.kuckhoffstr_berlin\"") != nullptr);
+  CHECK(strstr(buf, "\"sensor.home_m1_tram_last_departed\"") != nullptr);
+  for (const ClimateRoom& r : CLIMATE_ROOMS) {
+    std::string t = std::string("\"") + r.temp + "\"", h = std::string("\"") + r.hum + "\"";
+    CHECK(strstr(buf, t.c_str()) && strstr(buf, h.c_str()));
+  }
+  CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
+  JsonDocument d;
+  CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
+  CHECK(d["entity_ids"].size() == 13);
+  char tiny[40];
+  CHECK(!haBuildSubscribe(tiny, sizeof(tiny)));  // reports truncation
+}
+
+static void test_routing_reaches_climate() {
+  HaProto p; TramState s{}; ClimateState c{};
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, d.as<JsonVariantConst>());
+  CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
+}
+
 int main() {
   test_ws_encode_small();
   test_ws_encode_medium();
@@ -488,6 +594,14 @@ int main() {
   test_first_upcoming_skips_past();
   test_battery_fill();
   test_battery_color();
+  test_temp_colour();
+  test_humidity_colour();
+  test_pm_colour();
+  test_rooms_map_to_sensors();
+  test_climate_event();
+  test_climate_format();
+  test_subscribe_lists_all_entities();
+  test_routing_reaches_climate();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

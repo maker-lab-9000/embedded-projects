@@ -1,15 +1,34 @@
 # Wio Terminal Home Assistant controller
 
-A Seeed Wio Terminal that shows Home Assistant dashboards. Version 1 has one
-page, **Tram**: when the next M1 leaves Kuckhoffstr. (green tram), when the
-last one left (red tram), and a 24 h chart of the minutes between trams.
-A battery meter sits in the top-left corner when the battery chassis is
-attached. Backlight runs at 35 %.
+A Seeed Wio Terminal that shows Home Assistant dashboards. Joystick
+left/right switches pages. A battery meter sits in the top-left corner when
+the battery chassis is attached. Backlight runs at 35 %.
+
+**Tram**: when the next M1 leaves Kuckhoffstr. (green tram), when the last
+one left (red tram), and a 24 h chart of the minutes between trams.
 
 ![Tram page](docs/images/tram-page.png)
 
-Planned pages (joystick left/right): Lights (brightness and color), Climate,
-Plugs, Status. Graphs are deferred.
+**Climate**: temperature and humidity per room, then air quality, with the
+Control Panel dashboard's colour rules:
+
+| Room | Temperature | Humidity |
+|---|---|---|
+| Bedroom | `sensor.multi_sensor_bedzimmer` | `sensor.multi_sensor_bedzimmer_2` |
+| Theo's room | `sensor.babyroom` | `sensor.babyroom_2` |
+| Bathroom | `sensor.temperature_9` | `sensor.humidity_10` |
+| Living room | `sensor.living_room` | `sensor.living_room_2` |
+
+- Thermometer: blue below 20 °C, yellow 20–26 °C, red above 26 °C.
+- Droplet: green up to 65 %, yellow above 65 %, red above 75 %.
+- PM2.5 (`sensor.nova_pm2_5`, limit 10) and PM10 (`sensor.nova_pm10`,
+  limit 20): green below the limit, yellow up to twice it, red above.
+- Grey icon and `--`: sensor unavailable.
+
+![Climate page](docs/images/climate-page.png)
+
+Planned pages: Lights (brightness and color), Plugs, Status. Graphs are
+deferred.
 
 ## Buttons
 
@@ -40,7 +59,7 @@ test/run.sh
 ## How it works
 
 - One websocket to `ws://<HA_HOST>:8123/api/websocket`: `subscribe_entities`
-  for the three tram entities (live pushes), `history/history_during_period`
+  for the tram and climate entities (live pushes), `history/history_during_period`
   for the chart every 10 min, a ping every 30 s.
 - If the token is rejected, the device stops and shows "Token rejected" —
   no retries, because Home Assistant bans IPs after repeated failed logins.
@@ -60,6 +79,7 @@ The last step reached before a reset is kept in backup RAM and printed at boot.
 ## Serial commands (115200 baud)
 
 - `r`: drop and reconnect the Home Assistant session (tests recovery).
+- `p`: next page (like joystick right).
 - `s`: dump a screenshot: `SHOT\n` followed by 320×240 RGB565 pixels, big-endian.
 - `c`: uptime, HA status, watchdog early-warning count.
 - `w`: hang on purpose to test the watchdog.
@@ -77,9 +97,11 @@ or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 | `wifi_pick.h` | which AP to join (pure) |
 | `ws_client.h`, `ws_frame.h` | minimal websocket client (ArduinoWebsockets has no SAMD support) |
 | `ha.h`, `ha_proto.h` | HA session I/O, protocol handling (pure) |
-| `tram_model.h` | HA messages → tram state (pure) |
+| `tram_model.h`, `climate_model.h` | HA messages → page state, colour rules (pure) |
 | `timeutil.h` | ISO time parsing, Berlin time, "in 4 min" / "3 min ago" (pure) |
-| `page_tram.h`, `chart.h` | drawing, chart geometry (pure) |
+| `header.h` | shared header: battery, title, HA status, clock; colours |
+| `page_tram.h`, `chart.h` | tram page drawing, chart geometry (pure) |
+| `page_climate.h` | climate page drawing |
 | `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
 | `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
 | `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |

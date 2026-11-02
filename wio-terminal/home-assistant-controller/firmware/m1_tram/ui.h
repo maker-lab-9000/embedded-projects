@@ -1,5 +1,4 @@
-// Buttons, display sleep and the page table. One page for now (Tram); the
-// joystick left/right will switch pages once more are added.
+// Buttons, display sleep and the page table. Joystick left/right switches pages.
 #pragma once
 #include <TFT_eSPI.h>
 #include "sleep_ctl.h"
@@ -45,6 +44,9 @@ static void uiKey(Key k) {
   }
   if (uiPages[uiPage].key) uiPages[uiPage].key(k);
 }
+
+// Serial 'p' in the sketch: next page, as the joystick right does.
+inline void uiNextPage() { uiKey(KEY_JOY_RIGHT); }
 
 // Debounced press edges -> uiKey(); redraws the current page unless dark.
 inline void uiPoll() {

@@ -19,12 +19,13 @@ static WsClient haWs;
 static HaProto haP;
 static Backoff haBackoff;
 static TramState* haState = nullptr;
+static ClimateState* haClimate = nullptr;
 static HaStatus haSt = HA_OFFLINE;
 static uint32_t haNextTry = 0, haConnStart = 0, haHistDue = 0, haPingDue = 0, haPingSent = 0;
 static uint32_t haNextId = 2;
 
 inline HaStatus haStatus() { return haSt; }
-inline void haInit(TramState* s) { haState = s; }
+inline void haInit(TramState* s, ClimateState* c) { haState = s; haClimate = c; }
 
 inline void haDrop(const char* why) {
   haWs.close();
@@ -59,19 +60,21 @@ inline void haHandle() {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, haWs.msg(), haWs.msgLen(), DeserializationOption::Filter(filter));
   if (err) { Serial.print("ha: json "); Serial.println(err.c_str()); return; }
-  switch (haHandleMessage(haP, *haState, doc.as<JsonVariantConst>())) {
+  switch (haHandleMessage(haP, *haState, *haClimate, doc.as<JsonVariantConst>())) {
     case HA_ACT_SEND_AUTH:
       haWs.sendText("{\"type\":\"auth\",\"access_token\":\"" HA_TOKEN "\"}");
       break;
-    case HA_ACT_SUBSCRIBE:
-      haWs.sendText("{\"id\":1,\"type\":\"subscribe_entities\",\"entity_ids\":[\""
-                    TRAM_ENTITY_DEPARTURES "\",\"" TRAM_ENTITY_GAP "\",\"" TRAM_ENTITY_LAST "\"]}");
+    case HA_ACT_SUBSCRIBE: {
+      static char sub[700];
+      if (haBuildSubscribe(sub, sizeof(sub))) haWs.sendText(sub);
+      else Serial.println("ha: subscribe request too long");
       haSt = HA_CONNECTED;
       haBackoff.reset();
       haHistDue = millis();
       haPingDue = millis() + HA_PING_EVERY_MS;
       Serial.println("ha: connected");
       break;
+    }
     case HA_ACT_REJECTED:
       haWs.close();
       haSt = HA_AUTH_REJECTED;
@@ -83,7 +86,7 @@ inline void haHandle() {
 }
 
 inline void haPoll() {
-  if (!haState || haSt == HA_AUTH_REJECTED) return;
+  if (!haState || !haClimate || haSt == HA_AUTH_REJECTED) return;
   uint32_t ms = millis();
   if (haSt == HA_OFFLINE) {
     if (!netUp() || (int32_t)(ms - haNextTry) < 0) return;

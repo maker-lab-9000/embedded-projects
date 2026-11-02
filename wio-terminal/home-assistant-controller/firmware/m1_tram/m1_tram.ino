@@ -1,14 +1,16 @@
-// Wio Terminal Home Assistant controller: Tram page (v1).
+// Wio Terminal Home Assistant controller: Tram and Climate pages.
 // See README.md. Secrets in secrets.h (copy secrets.h.example).
 #include <TFT_eSPI.h>
 #include "net.h"
 #include "ha.h"
 #include "page_tram.h"
+#include "page_climate.h"
 #include "ui.h"
 #include "wdt.h"
 
 static TFT_eSPI tft;
 static TramState tram{};
+static ClimateState climate{};
 
 static void drawTramPage(bool full) {
   uint32_t t0 = millis();
@@ -17,8 +19,13 @@ static void drawTramPage(bool full) {
   if (dt > 40 || full) { Serial.print("draw ms "); Serial.print(dt); Serial.println(full ? " (full)" : ""); }
 }
 
+static void drawClimatePage(bool full) {
+  climateDraw(tft, climate, nowUtc(), haStatus(), full);
+}
+
 static const Page PAGES[] = {
   {"Tram", drawTramPage, nullptr},
+  {"Climate", drawClimatePage, nullptr},
 };
 
 void setup() {
@@ -36,7 +43,7 @@ void setup() {
   uiInit(PAGES, sizeof(PAGES) / sizeof(PAGES[0]));
   uiPoll();  // first paint before the (blocking) WiFi scan
   netInit();
-  haInit(&tram);
+  haInit(&tram, &climate);
 }
 
 // Serial 's': raw RGB565 screenshot ("SHOT\n" + 320*240*2 bytes, big-endian rows).
@@ -63,6 +70,7 @@ void loop() {
     int c = Serial.read();
     if (c == 'r') haForceReconnect();   // test reconnects
     if (c == 's') screenshot();
+    if (c == 'p') { uiNextPage(); Serial.print("page "); Serial.println(uiPage); }  // no joystick needed
     if (c == 'c') {                     // uptime and watchdog breadcrumbs
       Serial.print("uptime s "); Serial.print(millis() / 1000);
       Serial.print(" ha "); Serial.print(haStatus());

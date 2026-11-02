@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <string.h>
 #include "tram_model.h"
+#include "climate_model.h"
 #include "timeutil.h"
 
 enum HaAction : uint8_t { HA_ACT_NONE, HA_ACT_SEND_AUTH, HA_ACT_SUBSCRIBE, HA_ACT_REJECTED };
@@ -38,7 +39,7 @@ inline void haBuildFilter(JsonDocument& f) {
   chg["-"] = true;
 }
 
-inline HaAction haHandleMessage(HaProto& p, TramState& s, JsonVariantConst msg) {
+inline HaAction haHandleMessage(HaProto& p, TramState& s, ClimateState& c, JsonVariantConst msg) {
   const char* type = msg["type"] | "";
   uint32_t id = msg["id"] | 0u;
   if (!strcmp(type, "auth_required")) return HA_ACT_SEND_AUTH;
@@ -46,6 +47,7 @@ inline HaAction haHandleMessage(HaProto& p, TramState& s, JsonVariantConst msg) 
   if (!strcmp(type, "auth_invalid")) { p.authed = false; return HA_ACT_REJECTED; }
   if (!strcmp(type, "event") && id == p.subId) {
     tramApplyEvent(s, msg["event"]);
+    climateApplyEvent(c, msg["event"]);
   } else if (!strcmp(type, "result") && id != 0 && id == p.histPending) {
     p.histPending = 0;
     if (msg["success"] | false) tramApplyHistory(s, msg["result"]);
@@ -53,6 +55,26 @@ inline HaAction haHandleMessage(HaProto& p, TramState& s, JsonVariantConst msg) 
     p.pingPending = 0;
   }
   return HA_ACT_NONE;
+}
+
+// The subscribe_entities request (id 1) for every entity the pages show.
+// Returns false if `n` is too small.
+inline bool haBuildSubscribe(char* buf, size_t n) {
+  size_t o = 0;
+  bool first = true;
+  auto add = [&](const char* s) {
+    if (o < n) o += snprintf(buf + o, n - o, "%s", s);
+  };
+  auto addId = [&](const char* id) {
+    add(first ? "\"" : ",\""); add(id); add("\"");
+    first = false;
+  };
+  add("{\"id\":1,\"type\":\"subscribe_entities\",\"entity_ids\":[");
+  addId(TRAM_ENTITY_DEPARTURES); addId(TRAM_ENTITY_GAP); addId(TRAM_ENTITY_LAST);
+  for (const ClimateRoom& r : CLIMATE_ROOMS) { addId(r.temp); addId(r.hum); }
+  for (const ClimatePm& pm : CLIMATE_PM) addId(pm.id);
+  add("]}");
+  return o < n;
 }
 
 // Inverse of daysFromCivil.
