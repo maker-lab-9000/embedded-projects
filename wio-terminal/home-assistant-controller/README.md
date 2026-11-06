@@ -88,6 +88,34 @@ changed for 3 min, the page shows "PC offline" and when it was last seen.
 
 Planned pages: Plugs, Status. Graphs are deferred.
 
+## Home Assistant: Alerts view
+
+`ha/alerts.py` holds one list of alert rules taken from the dashboard's own
+colours (an item is an alert when its card is red), plus batteries at 20 % or
+less and key devices that are unavailable: room temperature above 26 °C /
+humidity above 75 %, VMs without usage data (HA VM also above 90 %), RAID
+degraded, SMART failed, services and host checks down or without data,
+Gaming PC CPU above 85 °C / GPU hot spot above 100 °C / RAM above 90 % /
+drives at their warning temperature, and offline room, air, door and
+vibration sensors, lamps, thermostats, plugs and the camera hub.
+
+From the rules it generates the first view of the default dashboard,
+"Alerts": a summary card ("All clear" or "N alerts") and one red mushroom card
+per active alert, grouped like the dashboards, each linking to its view.
+Sections and cards are hidden while their rules are not red. It also
+generates a Jinja template (one `group|title` line per alert) that the Wio can
+subscribe to later with `render_template`.
+
+```sh
+python3 -m unittest discover -s ha        # rule tests
+python3 -I ha/deploy_alerts.py             # one HA login: backup, check, save
+python3 -I ha/deploy_alerts.py --restore ha/backups/lovelace-<time>.json
+```
+
+The deploy saves the current dashboard to `ha/backups/` (git-ignored) first,
+and saves nothing if HA's rendering of the template differs from the Python
+evaluation of the same rules.
+
 ## Buttons
 
 - **C** (leftmost top button): display off / on (18 % brightness). The connection stays up while dark.

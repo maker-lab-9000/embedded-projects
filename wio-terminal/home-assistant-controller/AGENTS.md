@@ -30,3 +30,7 @@
 - **Don't drive `LCD_BACKLIGHT` with digitalWrite**; use `backlightSet()`.
 - **Check the layout without the device in hand:** send `p` (next page) and `s` over serial in one port session and
   convert the RGB565 dump (big-endian) to PNG.
+- **Alerts view: change `ha/alerts.py`, not the dashboard.** The view is
+  generated; edits made in the HA UI are overwritten by the next deploy.
+  `ha/deploy_alerts.py` logs in once and writes the dashboard (with a backup):
+  run it only when the user asked for the change.

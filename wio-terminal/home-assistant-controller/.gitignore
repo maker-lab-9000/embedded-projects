@@ -1,2 +1,4 @@
 .env
 secrets.h
+ha/backups/
+__pycache__/
