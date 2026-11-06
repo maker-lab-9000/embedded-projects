@@ -25,15 +25,16 @@ static LightsState* haLights = nullptr;
 static HeatingState* haHeating = nullptr;
 static PowerState* haPower = nullptr;
 static HomelabState* haHomelab = nullptr;
-static bool haHlFillWanted = false;
-static uint32_t haHlSent = 0;
+static GamingState* haGaming = nullptr;
+static bool haHlFillWanted = false, haGpFillWanted = false;
+static uint32_t haHlSent = 0, haGpSent = 0;
 static HaStatus haSt = HA_OFFLINE;
 static uint32_t haNextTry = 0, haConnStart = 0, haHistDue = 0, haPingDue = 0, haPingSent = 0;
 static uint32_t haNextId = 2;
 
 inline HaStatus haStatus() { return haSt; }
-inline void haInit(TramState* s, ClimateState* c, LightsState* l, HeatingState* h, PowerState* pw, HomelabState* hl) {
-  haState = s; haClimate = c; haLights = l; haHeating = h; haPower = pw; haHomelab = hl;
+inline void haInit(TramState* s, ClimateState* c, LightsState* l, HeatingState* h, PowerState* pw, HomelabState* hl, GamingState* gp) {
+  haState = s; haClimate = c; haLights = l; haHeating = h; haPower = pw; haHomelab = hl; haGaming = gp;
 }
 
 // Sends a light service call; false when not connected (nothing is queued).
@@ -84,18 +85,18 @@ inline void haHandle() {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, haWs.msg(), haWs.msgLen(), DeserializationOption::Filter(filter));
   if (err) { Serial.print("ha: json "); Serial.println(err.c_str()); return; }
-  switch (haHandleMessage(haP, *haState, *haClimate, *haLights, *haHeating, *haPower, *haHomelab, doc.as<JsonVariantConst>())) {
+  switch (haHandleMessage(haP, *haState, *haClimate, *haLights, *haHeating, *haPower, *haHomelab, *haGaming, doc.as<JsonVariantConst>())) {
     case HA_ACT_SEND_AUTH:
       haWs.sendText("{\"type\":\"auth\",\"access_token\":\"" HA_TOKEN "\"}");
       break;
     case HA_ACT_SUBSCRIBE: {
-      static char sub[1400];
+      static char sub[2400];
       if (haBuildSubscribe(sub, sizeof(sub))) haWs.sendText(sub);
       else Serial.println("ha: subscribe request too long");
       haSt = HA_CONNECTED;
       haBackoff.reset();
       haHistDue = millis();
-      haHlFillWanted = true;  // reload the temperature history: there may be a gap
+      haHlFillWanted = haGpFillWanted = true;  // reload the graphs' history: there may be a gap
       haPingDue = millis() + HA_PING_EVERY_MS;
       Serial.println("ha: connected");
       break;
@@ -126,8 +127,24 @@ inline void haPollHomelab(uint32_t ms) {
   if (haWs.sendText(req)) { haP.hlPending = id; haHlSent = ms; }
 }
 
+// Gaming PC graphs: each sensor's last 15 min, one request at a time, after each connect.
+inline void haPollGaming(uint32_t ms) {
+  if (haGpFillWanted && nowUtc()) { gpBeginFill(*haGaming, nowUtc()); haGpFillWanted = false; }
+  if (haP.gpPending) {
+    if (ms - haGpSent < HA_HL_TIMEOUT_MS) return;
+    Serial.println("ha: gaming history timed out, skipped");
+    haP.gpPending = 0;
+    gpFillAdvance(*haGaming);
+  }
+  char req[320];
+  uint32_t id = haNextId;
+  if (!gpBuildRequest(req, sizeof(req), id, *haGaming)) return;
+  haNextId++;
+  if (haWs.sendText(req)) { haP.gpPending = id; haGpSent = ms; }
+}
+
 inline void haPoll() {
-  if (!haState || !haClimate || !haLights || !haHeating || !haPower || !haHomelab || haSt == HA_AUTH_REJECTED) return;
+  if (!haState || !haClimate || !haLights || !haHeating || !haPower || !haHomelab || !haGaming || haSt == HA_AUTH_REJECTED) return;
   uint32_t ms = millis();
   if (haSt == HA_OFFLINE) {
     if (!netUp() || (int32_t)(ms - haNextTry) < 0) return;
@@ -159,6 +176,7 @@ inline void haPoll() {
   if (!haP.histPending && (int32_t)(ms - haHistDue) >= 0) haSendHistory();
   wdtCrumb(27);
   haPollHomelab(ms);
+  haPollGaming(ms);
   if (haP.pingPending) {
     if (ms - haPingSent > HA_PING_TIMEOUT_MS) haDrop("ping timeout");
   } else if ((int32_t)(ms - haPingDue) >= 0) {

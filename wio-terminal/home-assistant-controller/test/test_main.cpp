@@ -233,10 +233,11 @@ static LightsState g_lights{};
 static HeatingState g_heating{};
 static PowerState g_power{};
 static HomelabState g_homelab{};
+static GamingState g_gaming{};
 static HaAction handle(HaProto& p, TramState& s, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json) == DeserializationError::Ok);
-  return haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, d.as<JsonVariantConst>());
+  return haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, g_gaming, d.as<JsonVariantConst>());
 }
 
 static void test_auth_flow() {
@@ -391,7 +392,7 @@ static void applyFiltered(HaProto& p, TramState& s, const char* json) {
   JsonDocument f; haBuildFilter(f);
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
-  haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, g_climate, g_lights, g_heating, g_power, g_homelab, g_gaming, d.as<JsonVariantConst>());
 }
 
 static void test_filter_keeps_gap_timestamp() {
@@ -657,7 +658,10 @@ static void test_homelab_fill_requests() {
   CHECK(hlNextRequest(H, i, a, b) && i == 4 && b == HL_NOW);
   hlFillAdvance(H);
   CHECK(hlNextRequest(H, i, a, b) && i == 0 && b == HL_NOW - HL_WINDOW_S && a == HL_NOW - 2 * HL_WINDOW_S);
-  while (H.fillNext < HL_REQUESTS) hlFillAdvance(H);
+  while (H.fillNext < HL_REQUESTS - 1) hlFillAdvance(H);
+  CHECK(hlNextRequest(H, i, a, b) && i == 4 && b == HL_NOW - 86400 + HL_WINDOW_S);
+  CHECK(a == HL_NOW - 86400 + HL_BUCKET_S);  // oldest piece starts at the oldest bucket: its first point is kept
+  hlFillAdvance(H);
   CHECK(!hlNextRequest(H, i, a, b));
   CHECK(HL_REQUESTS * HL_WINDOW_S / HL_TEMP_COUNT == 86400);
   hlFillAdvance(H);
@@ -736,21 +740,184 @@ static void test_routing_homelab_history() {
   JsonDocument d;
   deserializeJson(d, R"({"id":9,"type":"result","success":true,"result":{"sensor.cpu_temp":[{"s":"60","lu":1793630000.0}]}})",
                   DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, Ht, P, H, g_gaming, d.as<JsonVariantConst>());
   CHECK(p.hlPending == 0 && H.fillNext == 1);
   CHECK(H.s[0].n[(1793630000u / HL_BUCKET_S) % HL_BUCKETS] == 1);
   p.hlPending = 10;
   deserializeJson(d, R"({"id":10,"type":"result","success":false,"error":{"code":"x"}})", DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, Ht, P, H, g_gaming, d.as<JsonVariantConst>());
   CHECK(p.hlPending == 0 && H.fillNext == 2);  // a failed piece is skipped
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.proxmox_ram_usage":{"+":{"s":"81.5","lc":1.0}}}}})",
                   DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, L, Ht, P, H, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, Ht, P, H, g_gaming, d.as<JsonVariantConst>());
   CHECK(H.ram.known && H.ram.v == 81.5f);
 }
 
+#define GP_ID(x) "sensor.desktop_a498ue6_" x
+static void test_gaming_defs() {
+  CHECK(GP_COUNT == 10);
+  const char* labels[] = {"FPS", "GPU load", "GPU temp", "GPU clock", "GPU power", "VRAM", "CPU load", "CPU temp", "CPU clock", "RAM"};
+  const char* ids[] = {
+    GP_ID("amd_radeon_rx_6750_xt_fullscreen_fps_factor"), GP_ID("amd_radeon_rx_6750_xt_gpu_core_load"),
+    GP_ID("amd_radeon_rx_6750_xt_gpu_core_temperature"), GP_ID("amd_radeon_rx_6750_xt_gpu_core_clock"),
+    GP_ID("amd_radeon_rx_6750_xt_gpu_package_power"), GP_ID("amd_radeon_rx_6750_xt_gpu_memory_used_data"),
+    GP_ID("amd_ryzen_7_5800x3d_cpu_total_load"), GP_ID("amd_ryzen_7_5800x3d_core_tctl_tdie_temperature"),
+    GP_ID("amd_ryzen_7_5800x3d_cores_average_clock"), GP_ID("total_memory_memory_load")};
+  for (int i = 0; i < GP_COUNT; i++) { CHECK_STR(GP_METRICS[i].label, labels[i]); CHECK_STR(GP_METRICS[i].id, ids[i]); }
+  CHECK_STR(GP_HOTSPOT_ID, GP_ID("amd_radeon_rx_6750_xt_gpu_hot_spot_temperature"));
+}
+
+static void gpApply(GamingState& G, const char* json) {
+  JsonDocument d;
+  CHECK(deserializeJson(d, json) == DeserializationError::Ok);
+  gamingApplyEvent(G, d.as<JsonVariantConst>());
+}
+
+static const uint32_t GP_NOW = 1793800000u;  // multiple of 10
+
+static void test_gaming_live() {
+  GamingState G{};
+  gpApply(G, R"({"a":{"sensor.desktop_a498ue6_amd_radeon_rx_6750_xt_gpu_core_load":{"s":"97.0","lc":1793799990.5},
+    "sensor.desktop_a498ue6_amd_radeon_rx_6750_xt_gpu_hot_spot_temperature":{"s":"84.0","lc":1793799995},
+    "sensor.babyroom":{"s":"1"}}})");
+  CHECK(G.v[GP_GPU_LOAD].known && G.v[GP_GPU_LOAD].v == 97.0f);
+  CHECK(G.hot.known && G.hot.v == 84.0f);
+  CHECK(G.dirty == ((1u << GP_GPU_LOAD) | (1u << GP_GPU_TEMP)));  // hot spot shows in the GPU temp row
+  CHECK(G.lastSeen == 1793799995u);
+  // Samples join the graph only once the 15 min history load has started.
+  CHECK(G.s[GP_GPU_LOAD].n[(1793799990u / GP_BUCKET_S) % GP_BUCKETS] == 0);
+  gpBeginFill(G, GP_NOW);
+  gpApply(G, R"({"c":{"sensor.desktop_a498ue6_amd_radeon_rx_6750_xt_gpu_core_load":{"+":{"s":"95","lc":1793800003}}}})");
+  CHECK(G.s[GP_GPU_LOAD].n[(GP_NOW / GP_BUCKET_S) % GP_BUCKETS] == 1);
+  gpApply(G, R"({"c":{"sensor.desktop_a498ue6_amd_radeon_rx_6750_xt_gpu_core_load":{"+":{"s":"unavailable","lc":1793800020}}}})");
+  CHECK(!G.v[GP_GPU_LOAD].known);
+  CHECK(G.lastSeen == 1793800003u);  // going unavailable is not a sign of life
+}
+
+static void test_gaming_online() {
+  GamingState G{};
+  CHECK(!gpOnline(G, GP_NOW));  // nothing known
+  gpApply(G, R"({"a":{"sensor.desktop_a498ue6_amd_ryzen_7_5800x3d_cpu_total_load":{"s":"8.5","lc":1793799900}}})");
+  CHECK(gpOnline(G, GP_NOW));
+  CHECK(gpOnline(G, 0));                         // no clock yet: trust the state
+  CHECK(!gpOnline(G, 1793799900u + GP_STALE_S + 1));  // no change for 3 min: the PC is off
+  gpApply(G, R"({"c":{"sensor.desktop_a498ue6_amd_ryzen_7_5800x3d_cpu_total_load":{"+":{"s":"unavailable","lc":1793800000}}}})");
+  CHECK(!gpOnline(G, GP_NOW));
+}
+
+static void test_gaming_format() {
+  GamingState G{};
+  char b[12];
+  gpFormat(G, GP_GPU_CLOCK, b, sizeof(b)); CHECK_STR(b, "--");
+  G.v[GP_GPU_CLOCK] = {2580.4f, true}; gpFormat(G, GP_GPU_CLOCK, b, sizeof(b)); CHECK_STR(b, "2580");
+  G.v[GP_VRAM] = {9626.0f, true};      gpFormat(G, GP_VRAM, b, sizeof(b));      CHECK_STR(b, "9.4");  // MB -> GB
+  G.v[GP_FPS] = {143.6f, true};        gpFormat(G, GP_FPS, b, sizeof(b));       CHECK_STR(b, "144");
+  G.v[GP_FPS] = {0.0f, true};          gpFormat(G, GP_FPS, b, sizeof(b));       CHECK_STR(b, "--");   // not fullscreen
+  G.v[GP_FPS] = {-1.0f, true};         gpFormat(G, GP_FPS, b, sizeof(b));       CHECK_STR(b, "--");
+  CHECK_STR(GP_METRICS[GP_VRAM].unit, "GB");
+  CHECK_STR(GP_METRICS[GP_GPU_CLOCK].unit, "MHz");
+}
+
+static void test_gaming_colours() {
+  GamingState G{};
+  uint16_t amber = hexTo565("#c98a0b"), red = hexTo565("#d1453b"), green = hexTo565("#3fbf5f");
+  G.v[GP_CPU_TEMP] = {75, true};   CHECK(gpValue565(G, GP_CPU_TEMP) == 0);  // 0 = normal text colour
+  G.v[GP_CPU_TEMP] = {75.5f, true}; CHECK(gpValue565(G, GP_CPU_TEMP) == amber);
+  G.v[GP_CPU_TEMP] = {85.5f, true}; CHECK(gpValue565(G, GP_CPU_TEMP) == red);
+  G.v[GP_GPU_TEMP] = {70, true}; G.hot = {91, true};   CHECK(gpValue565(G, GP_GPU_TEMP) == amber);  // by hot spot
+  G.hot = {101, true};                                 CHECK(gpValue565(G, GP_GPU_TEMP) == red);
+  G.hot = {80, true};                                  CHECK(gpValue565(G, GP_GPU_TEMP) == 0);
+  G.v[GP_RAM] = {76, true};  CHECK(gpValue565(G, GP_RAM) == amber);
+  G.v[GP_RAM] = {91, true};  CHECK(gpValue565(G, GP_RAM) == red);
+  G.v[GP_FPS] = {29, true};  CHECK(gpValue565(G, GP_FPS) == red);
+  G.v[GP_FPS] = {59, true};  CHECK(gpValue565(G, GP_FPS) == amber);
+  G.v[GP_FPS] = {60, true};  CHECK(gpValue565(G, GP_FPS) == green);
+  G.v[GP_FPS] = {0, true};   CHECK(gpValue565(G, GP_FPS) == 0);
+  G.v[GP_GPU_LOAD] = {100, true}; CHECK(gpValue565(G, GP_GPU_LOAD) == 0);
+}
+
+static void test_gaming_fill_and_history() {
+  GamingState G{};
+  uint8_t m; uint32_t a, b;
+  CHECK(!gpNextRequest(G, m, a, b));
+  gpBeginFill(G, GP_NOW);
+  CHECK(gpNextRequest(G, m, a, b) && m == 0 && b == GP_NOW && a == GP_NOW - GP_WINDOW_S + GP_BUCKET_S);  // oldest bucket's start: the state at start_time lands in the graph
+  CHECK(GP_WINDOW_S == 900 && GP_BUCKETS * GP_BUCKET_S == 900);
+  JsonDocument d;
+  deserializeJson(d, R"({"sensor.desktop_a498ue6_amd_ryzen_7_5800x3d_cpu_total_load":[{"s":"10","lu":1793799100.0},
+    {"s":"20","lu":1793799995.0},{"s":"unavailable","lu":1793799996.0},{"s":"30","lu":1793799997.0},{"s":"99","lu":1793800000.0}]})");
+  gamingApplyHistory(G, d.as<JsonVariantConst>());
+  uint32_t slot = (1793799995u / GP_BUCKET_S) % GP_BUCKETS;
+  CHECK(G.s[GP_CPU_LOAD].n[slot] == 2 && G.s[GP_CPU_LOAD].sum[slot] == 50.0f);
+  CHECK(G.s[GP_CPU_LOAD].n[(GP_NOW / GP_BUCKET_S) % GP_BUCKETS] == 0);  // from fillTo on: live
+  CHECK(G.lastSeen == 1793799997u);
+  for (int k = 0; k < GP_COUNT; k++) gpFillAdvance(G);
+  CHECK(!gpNextRequest(G, m, a, b));
+  gpFillAdvance(G);
+  CHECK(G.fillNext == GP_COUNT);
+}
+
+static void test_gaming_points_and_scale() {
+  GamingState G{};
+  gpBeginFill(G, GP_NOW);
+  uint32_t b = GP_NOW / GP_BUCKET_S;
+  gpAddSample(G, GP_GPU_CLOCK, (b - 2) * GP_BUCKET_S, 2400);
+  gpAddSample(G, GP_GPU_CLOCK, b * GP_BUCKET_S + 1, 2600);
+  float pts[GP_BUCKETS];
+  CHECK(gpPoints(G, GP_GPU_CLOCK, pts) == 3);
+  CHECK(isnan(pts[GP_BUCKETS - 4]));
+  CHECK(pts[GP_BUCKETS - 3] == 2400 && pts[GP_BUCKETS - 2] == 2400 && pts[GP_BUCKETS - 1] == 2600);
+  float lo, hi;
+  gpScale(G, GP_GPU_LOAD, lo, hi);  CHECK(lo == 0 && hi == 100);  // percentages: fixed 0..100
+  gpScale(G, GP_GPU_CLOCK, lo, hi); CHECK(lo == 0 && hi == 2600);  // others: 0..window max
+  gpScale(G, GP_FPS, lo, hi);       CHECK(lo == 0 && hi == 60);    // with no data: the floor
+  gpScale(G, GP_CPU_TEMP, lo, hi);  CHECK(lo == 20 && hi == 100);
+  gpAdvance(G, b + GP_BUCKETS);  // 15 min later: all cleared
+  CHECK(gpPoints(G, GP_GPU_CLOCK, pts) == 0);
+}
+
+static void test_gaming_start_state_kept() {
+  GamingState G{};
+  gpBeginFill(G, GP_NOW);
+  uint8_t m; uint32_t a, b;
+  CHECK(gpNextRequest(G, m, a, b));
+  gpAddSample(G, GP_VRAM, a, 1500);  // HA's first point is the state at start_time
+  float pts[GP_BUCKETS];
+  CHECK(gpPoints(G, GP_VRAM, pts) == GP_BUCKETS);  // flat sensor: a full line
+}
+
+static void test_gaming_request_json() {
+  GamingState G{};
+  gpBeginFill(G, 1793570400u);
+  gpFillAdvance(G);
+  char buf[320];
+  CHECK(gpBuildRequest(buf, sizeof(buf), 7, G));
+  JsonDocument d;
+  CHECK(deserializeJson(d, buf) == DeserializationError::Ok);
+  CHECK_STR(d["entity_ids"][0] | "", GP_ID("amd_radeon_rx_6750_xt_gpu_core_load"));
+  CHECK_STR(d["start_time"] | "", "2026-11-01T21:45:10Z");
+  CHECK_STR(d["end_time"] | "", "2026-11-01T22:00:00Z");
+}
+
+static void test_routing_gaming_history() {
+  HaProto p; TramState s{}; ClimateState c{}; LightsState L{}; HeatingState Ht{}; PowerState P{}; HomelabState H{}; GamingState G{};
+  gpBeginFill(G, GP_NOW);
+  p.gpPending = 5;
+  JsonDocument f; haBuildFilter(f);
+  JsonDocument d;
+  deserializeJson(d, R"({"id":5,"type":"result","success":true,"result":{"sensor.desktop_a498ue6_amd_radeon_rx_6750_xt_fullscreen_fps_factor":[{"s":"144","lu":1793799990.0}]}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, Ht, P, H, G, d.as<JsonVariantConst>());
+  CHECK(p.gpPending == 0 && G.fillNext == 1);
+  CHECK(G.s[GP_FPS].n[(1793799990u / GP_BUCKET_S) % GP_BUCKETS] == 1);
+  deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.desktop_a498ue6_total_memory_memory_load":{"+":{"s":"48","lc":1.0}}}}})",
+                  DeserializationOption::Filter(f));
+  haHandleMessage(p, s, c, L, Ht, P, H, G, d.as<JsonVariantConst>());
+  CHECK(G.v[GP_RAM].known && G.v[GP_RAM].v == 48.0f);
+}
+
 static void test_subscribe_lists_all_entities() {
-  char buf[1400];
+  char buf[2400];
   CHECK(haBuildSubscribe(buf, sizeof(buf)));
   CHECK(strstr(buf, "\"type\":\"subscribe_entities\"") != nullptr);
   CHECK(strstr(buf, "\"sensor.kuckhoffstr_berlin\"") != nullptr);
@@ -762,7 +929,12 @@ static void test_subscribe_lists_all_entities() {
   CHECK(strstr(buf, "\"sensor.nova_pm2_5\"") && strstr(buf, "\"sensor.nova_pm10\""));
   JsonDocument d;
   CHECK(deserializeJson(d, buf) == DeserializationError::Ok);  // valid JSON
-  CHECK(d["entity_ids"].size() == 33);
+  CHECK(d["entity_ids"].size() == 44);
+  for (const GpMetric& m : GP_METRICS) {
+    std::string q = std::string("\"") + m.id + "\"";
+    CHECK(strstr(buf, q.c_str()) != nullptr);
+  }
+  CHECK(strstr(buf, GP_HOTSPOT_ID) != nullptr);
   CHECK(strstr(buf, "\"sensor.proxmox_cpu_usage\"") && strstr(buf, "\"sensor.proxmox_ram_usage\""));
   for (const HlTemp& t : HL_TEMPS) {
     std::string q = std::string("\"") + t.id + "\"";
@@ -789,7 +961,7 @@ static void test_routing_reaches_climate() {
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.living_room":{"+":{"s":"20.88","lc":1793570000.1}}}}})",
                   DeserializationOption::Filter(f));
   LightsState L{}; HeatingState H{};
-  haHandleMessage(p, s, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, H, g_power, g_homelab, g_gaming, d.as<JsonVariantConst>());
   CHECK(c.temp[3].known && c.temp[3].v == 20.88f);
 }
 
@@ -799,7 +971,7 @@ static void test_routing_reaches_power() {
   JsonDocument d;
   deserializeJson(d, R"({"id":1,"type":"event","event":{"c":{"sensor.home_plugs_total_power":{"+":{"s":"98.5","lc":1.0}}}}})",
                   DeserializationOption::Filter(f));
-  haHandleMessage(p, s, c, L, H, P, g_homelab, d.as<JsonVariantConst>());
+  haHandleMessage(p, s, c, L, H, P, g_homelab, g_gaming, d.as<JsonVariantConst>());
   CHECK(P.total.known && P.total.v == 98.5f);
 }
 
@@ -811,7 +983,7 @@ static void applyLights(LightsState& L, const char* json) {
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{};
   HeatingState H{};
-  haHandleMessage(p, t, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, g_homelab, g_gaming, d.as<JsonVariantConst>());
 }
 
 static void test_lights_defs() {
@@ -965,7 +1137,7 @@ static void applyHeating(HeatingState& H, const char* json) {
   JsonDocument d;
   CHECK(deserializeJson(d, json, DeserializationOption::Filter(f)) == DeserializationError::Ok);
   HaProto p; TramState t{}; ClimateState c{}; LightsState L{};
-  haHandleMessage(p, t, c, L, H, g_power, g_homelab, d.as<JsonVariantConst>());
+  haHandleMessage(p, t, c, L, H, g_power, g_homelab, g_gaming, d.as<JsonVariantConst>());
 }
 
 static void test_heating_defs() {
@@ -1157,6 +1329,16 @@ int main() {
   test_homelab_scale();
   test_homelab_request_json();
   test_routing_homelab_history();
+  test_gaming_defs();
+  test_gaming_live();
+  test_gaming_online();
+  test_gaming_format();
+  test_gaming_colours();
+  test_gaming_fill_and_history();
+  test_gaming_points_and_scale();
+  test_gaming_request_json();
+  test_gaming_start_state_kept();
+  test_routing_gaming_history();
   printf("%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

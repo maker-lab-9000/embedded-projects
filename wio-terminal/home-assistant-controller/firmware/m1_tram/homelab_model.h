@@ -89,6 +89,8 @@ inline bool hlNextRequest(const HomelabState& H, uint8_t& sensor, uint32_t& star
   sensor = H.fillNext % HL_TEMP_COUNT;
   end = H.fillTo - w * HL_WINDOW_S;
   start = end - HL_WINDOW_S;
+  uint32_t oldest = (H.head - (HL_BUCKETS - 1)) * HL_BUCKET_S;  // the state at start_time must land in the chart
+  if (start < oldest) start = oldest;
   return true;
 }
 

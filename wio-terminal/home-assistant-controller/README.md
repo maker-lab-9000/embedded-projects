@@ -74,6 +74,18 @@ itself; live changes extend the chart after that.
 
 ![Homelab page](docs/images/homelab-page.png)
 
+**Gaming PC**: MSI Afterburner style, from the Gaming PC dashboard (the PC's
+`sensor.desktop_a498ue6_*` sensors, every ~10 s). One row per metric with a
+15 min graph and the current value: FPS (fullscreen only, "--" otherwise),
+GPU load / temperature (with hot spot) / clock / power / VRAM (green), CPU
+load / temperature / clock and RAM (blue). Warning colours follow the
+dashboard's chips: CPU above 75 / 85 °C, GPU hot spot above 90 / 100 °C,
+RAM above 75 / 90 %, FPS below 60 / 30. The 15 min load per sensor after
+each connect (a few KB each). When the sensors are unavailable or nothing
+changed for 3 min, the page shows "PC offline" and when it was last seen.
+
+![Gaming PC page](docs/images/gaming-page.png)
+
 Planned pages: Plugs, Status. Graphs are deferred.
 
 ## Buttons
@@ -155,6 +167,7 @@ or check resets passively by watching whether `/dev/cu.usbmodem*` disappears.
 | `heating_model.h`, `page_heating.h` | thermostat state, keys, debounced target (pure); heating page drawing |
 | `power_model.h`, `page_power.h` | plug power readings, bar share (pure); power page drawing |
 | `homelab_model.h`, `page_homelab.h` | host usage, 24 h temperature buckets and history loading (pure); homelab page drawing |
+| `gaming_model.h`, `page_gaming.h` | gaming PC metrics, 15 min graph buckets, warning colours, offline detection (pure); gaming PC page drawing |
 | `ui.h`, `sleep_ctl.h` | buttons, display sleep, page switching |
 | `backlight.h` | PWM brightness via TC0 → CCL → EVSYS (the pin has no PWM) |
 | `battery.h`, `battery_meter.h` | BQ27441 fuel gauge, meter math (pure) |
